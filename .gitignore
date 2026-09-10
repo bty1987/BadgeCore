@@ -1,0 +1,28 @@
+# 登录态与个人数据，严禁入库
+**/profile/
+tools/browser-drive/
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+__pycache__/
+
+# 日志与临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 大型原始录音（按需放行）
+sessions/
+*.wav
+*.opus
+*.ogg
+
+# IDE
+.idea/
+.vscode/
+
+# 迁移残留（禁止回写）
+*.bak

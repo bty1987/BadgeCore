@@ -1,0 +1,12 @@
+{
+  "name": "badgecore-receiver",
+  "version": "0.2.0",
+  "description": "BadgeCore 第一公里接收服务端：xiaozhi 协议 OTA+WS，OPUS 收流封装 Ogg",
+  "main": "receiver.js",
+  "scripts": {
+    "start": "node receiver.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
