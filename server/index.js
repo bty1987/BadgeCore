@@ -26,14 +26,16 @@ const crypto = require('crypto');
 const { openDb, getSetting, setSetting, audit } = require('./db');
 const { analyzeCommunication } = require('./analysis');
 const { judgeAttendance, periodsToDaily } = require('./attendance');
+const { redactText } = require('./redact');
+const { runRetentionPurge, loadRetention, MIN: RETENTION_MIN } = require('./retention');
 
 const PORT = Number(process.env.PORT || 8200);
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'badgecore.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const CONFIG_DOMAINS = [ // 04 册沟通配置九大域（ADM-01x）+ 知识库/案例库/风险规则（04 册 §2 菜单）
+const CONFIG_DOMAINS = [ // 04 册沟通配置九大域（ADM-01x）+ 知识库/案例库/风险规则/定时报告（04 册 §2 菜单）
   'info_fields', 'deal_models', 'task_models', 'ability_models',
   'summary_templates', 'analysis_dims', 'flows', 'violations', 'competitors',
-  'knowledge_base', 'case_library', 'risk_rules',
+  'knowledge_base', 'case_library', 'risk_rules', 'scheduled_reports',
 ];
 const SESSION_TTL = 12 * 3600 * 1000;
 
@@ -153,6 +155,76 @@ function searchCommunications(question, scopeSql, scopeParams) {
   }).filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
 }
 
+/** Ask AI 核心（AI-08）：权限内检索 → LLM/Mock 回答（/api/ask 与 AI-11 定时任务复用） */
+async function answerQuestion(role, name, question) {
+  const scopeSql = role === 'sales' ? 'WHERE owner=?' : '';
+  const scopeParams = role === 'sales' ? [name] : [];
+  const comms = searchCommunications(String(question), scopeSql, scopeParams);
+  const kbs = db.prepare("SELECT name, data FROM config_items WHERE domain='knowledge_base' AND enabled=1 ORDER BY sort,id").all()
+    .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
+  const cases = db.prepare("SELECT name, data FROM config_items WHERE domain='case_library' AND enabled=1 ORDER BY sort,id").all()
+    .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
+  const sources = [
+    ...comms.map((c, i) => ({ n: i + 1, type: 'comm', id: c.id, title: `沟通#${c.id} ${c.topic || ''}`, snippet: (c.transcript || '').slice(0, 120) })),
+    ...kbs.map((k, i) => ({ n: comms.length + i + 1, type: 'kb', id: 0, title: `知识库·${k.name}`, snippet: String(k.content || k.desc || '').slice(0, 120) })),
+    ...cases.map((c, i) => ({ n: comms.length + kbs.length + i + 1, type: 'case', id: 0, title: `案例·${c.name}`, snippet: String(c.script || c.content || '').slice(0, 120) })),
+  ];
+  const llm = getSetting(db, 'llm');
+  let answer;
+  if (!llm || llm.provider === 'mock') {
+    answer = `【Mock】在${role === 'sales' ? '你名下' : '全企业'}数据范围内检索到 ${comms.length} 条相关沟通、知识库 ${kbs.length} 条、案例 ${cases.length} 条。` +
+      (sources.length ? `最相关：${sources[0].title}（${sources[0].snippet}…）。配置真实 LLM 后可获得基于以上来源的综合回答。` : '未检索到相关内容，可尝试更换关键词。');
+  } else {
+    const context = sources.map(s => `[${s.n}] ${s.title}\n${s.snippet}`).join('\n\n');
+    const messages = [
+      { role: 'system', content: '你是企业沟通数据问答助手（SalesCoach 视角）。只依据下方【检索来源】回答；每个事实结论标注来源编号如 [1]；来源不足以回答时明确说明，禁止编造；不透露来源之外的其他员工数据。回答用中文，简洁分点。' },
+      { role: 'user', content: `【检索来源】\n${context}\n\n【问题】${question}` },
+    ];
+    const raw = await fetch(llm.base_url.replace(/\/$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${llm.api_key}` },
+      body: JSON.stringify({ model: llm.model, messages, temperature: 0.2 }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!raw.ok) throw new HttpError(502, `LLM HTTP ${raw.status}`);
+    const d = await raw.json();
+    answer = d.choices?.[0]?.message?.content || '(空回答)';
+  }
+  return { answer, sources };
+}
+
+/** 访前准备智能体（AI-10）：客户背景/行业动态/产品匹配/准备问题清单 */
+async function prepVisitPlan(role, name, customer, notes) {
+  const { answer } = await answerQuestion(role, name, `${customer} ${notes || ''}`); // 复用检索作上下文来源
+  const llm = getSetting(db, 'llm');
+  const kbs = db.prepare("SELECT name FROM config_items WHERE domain='knowledge_base' AND enabled=1").all();
+  const comms = searchCommunications(customer, role === 'sales' ? 'WHERE owner=?' : '', role === 'sales' ? [name] : []);
+  if (!llm || llm.provider === 'mock') {
+    return {
+      customer: customer || '(未填)',
+      background: `【Mock】检索到该客户相关沟通 ${comms.length} 条；知识库 ${kbs.length} 条可作资料底座。`,
+      industry: '【Mock】行业动态需接入真实 LLM 联网检索后生成。',
+      match: kbs.slice(0, 3).map(k => `可引用知识：${k.name}`).join('；') || '【Mock】知识库为空，建议先在配置页补充产品知识。',
+      questions: ['客户目前最关注什么？', '上次沟通遗留了什么未解决项？', '本次要拿到什么承诺/下一步？'],
+      note: answer.slice(0, 100),
+    };
+  }
+  const messages = [
+    { role: 'system', content: '你是销售访前准备智能体。依据【上下文】输出严格 JSON：{background, industry, match, questions:[string]}, 只输出 JSON。' },
+    { role: 'user', content: `【上下文】\n${answer}\n\n【客户】${customer}\n【备注】${notes || '无'}` },
+  ];
+  const raw = await fetch(llm.base_url.replace(/\/$/, '') + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${llm.api_key}` },
+    body: JSON.stringify({ model: llm.model, messages, temperature: 0.3 }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!raw.ok) throw new HttpError(502, `LLM HTTP ${raw.status}`);
+  const d = await raw.json();
+  const plan = JSON.parse(String(d.choices?.[0]?.message?.content || '{}').replace(/```(?:json)?|```/g, '').trim());
+  return { customer: customer || '(未填)', ...plan };
+}
+
 function loadAnalysisConfig() {
   const cfg = {};
   for (const domain of ['deal_models', 'task_models', 'competitors', 'violations', 'analysis_dims']) {
@@ -209,13 +281,14 @@ async function handleApi(req, res, url) {
     const got = req.headers['x-ingest-token'] || (await readBody(req)).token;
     if (!expect || got !== expect) throw new HttpError(401, '入库令牌无效');
     const b = await readBody(req);
+    const transcript = redactText(String(b.transcript || '')); // CMP-07：入库即脱敏（LLM/检索不接触明文）
     const info = db.prepare('INSERT INTO communications(created_at, duration_s, audio_path, transcript, status, owner, topic, meta) VALUES(?,?,?,?,?,?,?,?)')
       .run(
         b.created_at || new Date().toISOString(),
         Number(b.duration_s) || 0,
         String(b.audio_path || ''),
-        String(b.transcript || ''),
-        b.transcript ? 'transcribed' : 'recorded',
+        transcript,
+        transcript ? 'transcribed' : 'recorded',
         String(b.owner || ''),
         String(b.topic || ''),
         JSON.stringify({ device: b.device || '', source: b.source || 'receiver' }),
@@ -223,14 +296,14 @@ async function handleApi(req, res, url) {
     const id = Number(info.lastInsertRowid);
     audit(db, 'receiver', 'ingest', `comm#${id}`, `${Number(b.duration_s) || 0}s`);
     // 实时辅助·规则预筛（AI-09）：竞品/风险词命中随记录下发并告警
-    const alerts = computeAlerts(String(b.transcript || ''));
+    const alerts = computeAlerts(transcript);
     if (alerts.length) {
       db.prepare('UPDATE communications SET meta=? WHERE id=?')
         .run(JSON.stringify({ device: b.device || '', source: b.source || 'receiver', alerts }), id);
       for (const a of alerts) audit(db, 'rule_engine', 'risk_alert', `comm#${id}`, `${a.type}:${a.word}`);
     }
     const llm = getSetting(db, 'llm');
-    if (llm.auto && b.transcript) {
+    if (llm.auto && transcript) {
       try { await runAnalysis(id, 'auto'); return sendJson(res, 200, { id, analyzed: true }); }
       catch (e) { return sendJson(res, 200, { id, analyzed: false, error: e.message }); }
     }
@@ -286,13 +359,43 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, report });
   }
 
-  // 设置（LLM Key 只写不读，07 册 CMP-12 最小暴露）
+  // 导出（CMP-13：水印=访问者+时间，写审计）
+  if ((m = pathname.match(/^\/api\/communications\/(\d+)\/export$/)) && method === 'GET') {
+    const id = Number(m[1]);
+    const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
+    if (!row) throw new HttpError(404, '沟通记录不存在');
+    if (me.role === 'sales' && row.owner !== me.name) throw new HttpError(403, '无权导出该记录');
+    const report = row.report ? JSON.parse(row.report) : null;
+    const text = [
+      'BadgeCore 沟通记录导出',
+      `【水印】导出人: ${me.name}（${me.role}）  时间: ${new Date().toLocaleString('zh-CN')}  本次导出已记入审计日志`,
+      '='.repeat(60),
+      `主题: ${row.topic || '(未命名)'}  时间: ${row.created_at}  时长: ${row.duration_s}s  归属: ${row.owner || '-'}`,
+      '',
+      '── 转写全文（已脱敏 CMP-07）──',
+      row.transcript || '(无/已过留存期)',
+      '',
+      '── AI 分析报告 ──',
+      report ? JSON.stringify(report, null, 2) : '(未生成/已过留存期)',
+      '',
+      '以上内容由 AI 生成，仅供参考。',
+    ].join('\n');
+    audit(db, me.name, 'export', `comm#${id}`, '水印导出');
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="badgecore-comm-${id}.txt"`,
+    });
+    return res.end(text);
+  }
+
+  // 设置（LLM Key 只写不读，07 册 CMP-12 最小暴露；留存 CMP-08）
   if (pathname === '/api/settings') {
     if (method === 'GET') {
       const llm = getSetting(db, 'llm');
       const token = getSetting(db, 'ingest_token');
       return sendJson(res, 200, {
         llm: { ...llm, api_key: undefined, has_api_key: !!llm.api_key },
+        retention: loadRetention(db),
         ingest_token: me.role === 'admin' ? token : undefined,
       });
     }
@@ -310,9 +413,27 @@ async function handleApi(req, res, url) {
         setSetting(db, 'llm', next);
         audit(db, me.name, 'set_llm', `provider=${next.provider} model=${next.model}`);
       }
+      if (b.retention) { // CMP-08：不得低于建议下限
+        const r = b.retention;
+        for (const k of Object.keys(RETENTION_MIN)) {
+          if (Number(r[k]) && Number(r[k]) < RETENTION_MIN[k]) {
+            throw new HttpError(400, `留存天数不得低于建议期：${k} ≥ ${RETENTION_MIN[k]} 天（07 册 CMP-08）`);
+          }
+        }
+        setSetting(db, 'retention', {
+          audio_days: Number(r.audio_days) || RETENTION_MIN.audio_days,
+          transcript_days: Number(r.transcript_days) || RETENTION_MIN.transcript_days,
+          report_days: Number(r.report_days) || RETENTION_MIN.report_days,
+        });
+        audit(db, me.name, 'set_retention', JSON.stringify(r));
+      }
       return sendJson(res, 200, { ok: true });
     }
     throw new HttpError(403, '仅管理员可改设置');
+  }
+  if (pathname === '/api/settings/purge' && method === 'POST' && me.role === 'admin') {
+    const result = runRetentionPurge(db);
+    return sendJson(res, 200, result);
   }
   if (pathname === '/api/llm-test' && method === 'POST') {
     const llm = getSetting(db, 'llm');
@@ -396,41 +517,39 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/ask' && method === 'POST') {
     const { question } = await readBody(req);
     if (!question || String(question).length < 2) throw new HttpError(400, '问题太短');
-    const scopeSql = me.role === 'sales' ? 'WHERE owner=?' : '';
-    const scopeParams = me.role === 'sales' ? [me.name] : [];
-    const comms = searchCommunications(String(question), scopeSql, scopeParams);
-    const kbs = db.prepare("SELECT name, data FROM config_items WHERE domain='knowledge_base' AND enabled=1 ORDER BY sort,id").all()
-      .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
-    const cases = db.prepare("SELECT name, data FROM config_items WHERE domain='case_library' AND enabled=1 ORDER BY sort,id").all()
-      .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
-    const sources = [
-      ...comms.map((c, i) => ({ n: i + 1, type: 'comm', id: c.id, title: `沟通#${c.id} ${c.topic || ''}`, snippet: (c.transcript || '').slice(0, 120) })),
-      ...kbs.map((k, i) => ({ n: comms.length + i + 1, type: 'kb', id: 0, title: `知识库·${k.name}`, snippet: String(k.content || k.desc || '').slice(0, 120) })),
-      ...cases.map((c, i) => ({ n: comms.length + kbs.length + i + 1, type: 'case', id: 0, title: `案例·${c.name}`, snippet: String(c.script || c.content || '').slice(0, 120) })),
-    ];
-    const llm = getSetting(db, 'llm');
-    let answer;
-    if (!llm || llm.provider === 'mock') {
-      answer = `【Mock】在${me.role === 'sales' ? '你名下' : '全企业'}数据范围内检索到 ${comms.length} 条相关沟通、知识库 ${kbs.length} 条、案例 ${cases.length} 条。` +
-        (sources.length ? `最相关：${sources[0].title}（${sources[0].snippet}…）。配置真实 LLM 后可获得基于以上来源的综合回答。` : '未检索到相关内容，可尝试更换关键词。');
-    } else {
-      const context = sources.map(s => `[${s.n}] ${s.title}\n${s.snippet}`).join('\n\n');
-      const messages = [
-        { role: 'system', content: '你是企业沟通数据问答助手（SalesCoach 视角）。只依据下方【检索来源】回答；每个事实结论标注来源编号如 [1]；来源不足以回答时明确说明，禁止编造；不透露来源之外的其他员工数据。回答用中文，简洁分点。' },
-        { role: 'user', content: `【检索来源】\n${context}\n\n【问题】${question}` },
-      ];
-      const raw = await fetch(llm.base_url.replace(/\/$/, '') + '/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${llm.api_key}` },
-        body: JSON.stringify({ model: llm.model, messages, temperature: 0.2 }),
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (!raw.ok) throw new HttpError(502, `LLM HTTP ${raw.status}`);
-      const d = await raw.json();
-      answer = d.choices?.[0]?.message?.content || '(空回答)';
-    }
+    const { answer, sources } = await answerQuestion(me.role, me.name, String(question));
     audit(db, me.name, 'ask', '', String(question).slice(0, 80));
     return sendJson(res, 200, { answer, sources, ai_generated: true });
+  }
+
+  // 访前准备智能体（AI-10）
+  if (pathname === '/api/prep-visit' && method === 'POST') {
+    const { customer, notes } = await readBody(req);
+    if (!customer) throw new HttpError(400, '需要 customer');
+    const plan = await prepVisitPlan(me.role, me.name, String(customer), String(notes || ''));
+    audit(db, me.name, 'prep_visit', String(customer));
+    return sendJson(res, 200, { plan, ai_generated: true });
+  }
+
+  // 站内信（AI-11 投递箱）
+  if (pathname === '/api/notifications' && method === 'GET') {
+    const rows = db.prepare('SELECT * FROM notifications WHERE user=? ORDER BY id DESC LIMIT 100').all(me.name);
+    const unread = db.prepare('SELECT COUNT(*) c FROM notifications WHERE user=? AND read=0').get(me.name).c;
+    return sendJson(res, 200, { unread, rows });
+  }
+  if (pathname === '/api/notifications/read' && method === 'POST') {
+    db.prepare('UPDATE notifications SET read=1 WHERE user=? AND (read=0)').run(me.name);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // 定时报告：手动触发一次（AI-11；调度器每分钟自动检查，此端点供验证/运维）
+  if (pathname === '/api/scheduled/run' && method === 'POST') {
+    if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
+    const b = await readBody(req);
+    const item = db.prepare('SELECT * FROM config_items WHERE domain=? AND id=?').get('scheduled_reports', Number(b.id));
+    if (!item) throw new HttpError(404, '定时任务不存在');
+    await fireScheduledItem(item, true);
+    return sendJson(res, 200, { ok: true });
   }
 
   // 考勤（05 册 ALL-201/202；CMP-09 与沟通数据分域，HR 角色仅经此接口触达考勤）
@@ -482,7 +601,43 @@ function serveStatic(req, res, pathname) {
 }
 
 // ---------- 服务器 ----------
+// AI-11 定时报告：执行一个定时任务项（Ask AI 管理员视角检索 → 站内信投递）
+async function fireScheduledItem(item, manual = false) {
+  const d = JSON.parse(item.data || '{}');
+  const { answer } = await answerQuestion('admin', 'scheduler', d.question || item.name);
+  const recipients = (d.recipients && d.recipients.length) ? d.recipients : ['admin'];
+  for (const user of recipients) {
+    db.prepare('INSERT INTO notifications(user, title, body, created_at) VALUES(?,?,?,?)')
+      .run(user, `[${item.name}] ${d.time || ''}`, answer + '\n\n（以上内容由 AI 生成，仅供参考）', new Date().toISOString());
+  }
+  db.prepare('UPDATE config_items SET data=? WHERE id=?').run(JSON.stringify({ ...d, last_fired: new Date().toISOString() }), item.id);
+  audit(db, 'scheduler', 'scheduled_report', item.name, `→${recipients.join(',')}${manual ? '（手动触发）' : ''}`);
+}
+
+// AI-11 调度器：每分钟检查，到点且当日未发则补发（服务重启当日不错过）
+function startScheduler() {
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      const currentMin = now.getHours() * 60 + now.getMinutes();
+      for (const item of db.prepare("SELECT * FROM config_items WHERE domain='scheduled_reports' AND enabled=1").all()) {
+        const d = JSON.parse(item.data || '{}');
+        if (!d.time) continue;
+        const [h, min] = String(d.time).split(':').map(Number);
+        const firedToday = String(d.last_fired || '').slice(0, 10) === today;
+        if (!firedToday && currentMin >= h * 60 + min) {
+          try { await fireScheduledItem(item); } catch (e) { console.error(`[调度器] ${item.name} 失败:`, e.message); }
+        }
+      }
+    } catch (e) { console.error('[调度器]', e.message); }
+  }, 60_000).unref();
+}
+
 seed();
+try { const purged = runRetentionPurge(db); console.log(`[留存] 启动清理：音频 ${purged.audio}，转写 ${purged.transcripts}，报告 ${purged.reports}（180天/3年，CMP-08）`); } catch (e) { console.error('[留存] 启动清理失败:', e.message); }
+setInterval(() => { try { runRetentionPurge(db); } catch { /* 下轮再试 */ } }, 24 * 3600 * 1000).unref();
+startScheduler();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {

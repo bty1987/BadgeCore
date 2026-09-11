@@ -7,7 +7,9 @@
  * LLM 供应商：OpenAI 兼容 /chat/completions（GLM/DeepSeek/Qwen 均兼容），配置在后台「设置」页；
  * provider=mock 时用本地确定性 Mock（测试管道用，不调网络）。
  * 所有报告带 meta.ai_generated=true（07 册 CMP-17 AI 生成标识）。
+ * 输出层过 redact.js（07 册 CMP-07 敏感信息脱敏，双层防御的第二层）。
  */
+const { redactDeep } = require('./redact');
 
 // ---------- 报告骨架 ----------
 function reportSkeleton() {
@@ -135,7 +137,8 @@ async function analyzeCommunication(llmCfg, transcript, cfg) {
   const warnings = [];
   const messages = buildMessages(transcript || '（空转写）', cfg || {});
   const raw = await callLLM(llmCfg, messages);
-  const report = normalizeReport(parseReport(raw), warnings);
+  let report = normalizeReport(parseReport(raw), warnings);
+  report = redactDeep(report); // CMP-07：输出层脱敏（入库层已脱敏，此为第二层防御）
   report.meta = {
     model: llmCfg?.provider === 'mock' ? 'mock' : `${llmCfg?.model || '?'}`,
     generated_at: new Date().toISOString(),

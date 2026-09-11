@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS attendance_records(  -- 05 册 ALL-201/202，与沟�
   source TEXT NOT NULL DEFAULT 'beacon',       -- beacon | manual
   note TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS notifications(        -- 站内信（AI-11 定时报告推送的投递箱）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT,

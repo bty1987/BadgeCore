@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>消息 · BadgeCore</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">BadgeCore</span>
+  <nav>
+    <a href="/">沟通记录</a>
+    <a href="/ask.html">Ask AI</a>
+    <a href="/attendance.html">考勤</a>
+    <a href="/config.html">沟通配置</a>
+    <a href="/settings.html">设置</a>
+  </nav>
+  <span class="spacer"></span><span class="who" id="who"></span>
+  <button onclick="markAll()">全部已读</button>
+  <button onclick="location='/login.html'">退出</button>
+</div>
+<div class="wrap">
+  <div class="card">
+    <h2>站内消息（定时报告推送投递箱，AI-11）</h2>
+    <table><thead><tr><th>时间</th><th>标题</th><th>内容</th></tr></thead><tbody id="tbody"></tbody></table>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { location.href = '/login.html'; throw 0; }
+  return res;
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load() {
+  const me = await (await api('/api/me')).json();
+  $('who').textContent = `${me.name}（${me.role}） 未读 ${''}`;
+  const d = await (await api('/api/notifications')).json();
+  $('who').textContent = `${me.name}（${me.role}） 未读 ${d.unread}`;
+  $('tbody').innerHTML = d.rows.map(n => `
+    <tr style="${n.read ? 'opacity:.55' : ''}">
+      <td>${(n.created_at || '').replace('T', ' ').slice(0, 16)}</td>
+      <td><b>${n.read ? '' : '● '}${esc(n.title)}</b></td>
+      <td style="white-space:pre-wrap">${esc(n.body)}</td>
+    </tr>`).join('') || '<tr><td colspan="3" class="muted">暂无消息。定时任务在「沟通配置→定时报告」里创建。</td></tr>';
+}
+async function markAll() { await api('/api/notifications/read', { method: 'POST' }); load(); }
+load();
+</script>
+</body>
+</html>

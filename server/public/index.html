@@ -15,6 +15,7 @@
     <a href="/attendance.html">考勤</a>
     <a href="/config.html">沟通配置</a>
     <a href="/settings.html">设置</a>
+    <a href="/notifications.html">消息</a>
   </nav>
   <span class="spacer"></span><span class="who" id="who"></span>
   <button onclick="logout()">退出</button>
@@ -102,7 +103,8 @@ async function detail(id) {
   $('d-meta').textContent = `${fmtTime(r.created_at)} · ${r.duration_s.toFixed(0)}s · 归属 ${r.owner || '-'} · ${r.meta?.device || ''}`;
   $('d-actions').innerHTML = `
     ${(r.meta?.alerts || []).map(a => `<span class="badge ${a.level === 'high' ? 'high' : 'mid'}" title="${esc(a.rule || '')}">${a.type === 'competitor' ? '竞品提及' : '风险词'}·${esc(a.word)}</span>`).join(' ')}
-    <button class="primary" onclick="analyze(${id})">${r.report ? '重新分析' : '生成分析报告'}</button>`;
+    <button class="primary" onclick="analyze(${id})">${r.report ? '重新分析' : '生成分析报告'}</button>
+    <button onclick="window.open('/api/communications/${id}/export')">导出（水印+审计）</button>`;
   renderReport(r.report);
   $('d-transcript').textContent = r.transcript || '(无转写)';
   drawer.classList.add('open');

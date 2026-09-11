@@ -15,6 +15,7 @@
     <a href="/attendance.html">考勤</a>
     <a href="/config.html">沟通配置</a>
     <a href="/settings.html" class="active">设置</a>
+    <a href="/notifications.html">消息</a>
   </nav>
   <span class="spacer"></span><span class="who" id="who"></span>
   <button onclick="location='/login.html'">退出</button>
@@ -45,6 +46,24 @@
         </div>
         <div id="llm-msg" class="muted" style="margin-top:10px"></div>
         <div class="muted">内部使用提示：mock 可先跑通全链路；接入真实供应商后，转写即自动生成报告。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="card-retention">
+    <h2>数据留存策略（07 册 CMP-08）</h2>
+    <div class="grid2">
+      <div>
+        <label>音频保留天数（下限 180）</label><input id="r-audio" type="number" min="180">
+        <label>转写保留天数（下限 1095）</label><input id="r-transcript" type="number" min="1095">
+      </div>
+      <div>
+        <label>报告保留天数（下限 1095）</label><input id="r-report" type="number" min="1095">
+        <div style="margin-top:16px">
+          <button class="primary" onclick="saveRetention()">保存留存策略</button>
+          <button onclick="purgeNow()">立即清理</button>
+        </div>
+        <div id="r-msg" class="muted" style="margin-top:10px">到期自动删除（启动时+每日+手动），清理动作写入审计作为删除证明；天数不可低于建议期。</div>
       </div>
     </div>
   </div>
@@ -93,6 +112,11 @@ async function init() {
   $('llm-url').value = s.llm.base_url || '';
   $('llm-model').value = s.llm.model || '';
   $('llm-auto').value = s.llm.auto ? '1' : '0';
+  if (s.retention) {
+    $('r-audio').value = s.retention.audio_days;
+    $('r-transcript').value = s.retention.transcript_days;
+    $('r-report').value = s.retention.report_days;
+  }
   if (s.ingest_token) {
     $('ingest-token').textContent = s.ingest_token;
     $('recv-cmd').textContent =
@@ -123,6 +147,21 @@ async function testLlm() {
   $('llm-msg').innerHTML = d.ok
     ? `<span class="ok">✓ 模型 ${esc(d.model)} 连通</span>：${esc(d.summary).slice(0, 80)}`
     : `<span class="err">✗ ${esc(d.error)}</span>`;
+}
+async function saveRetention() {
+  const body = { retention: {
+    audio_days: Number($('r-audio').value), transcript_days: Number($('r-transcript').value), report_days: Number($('r-report').value),
+  } };
+  const res = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  $('r-msg').innerHTML = res.ok ? '<span class="ok">✓ 留存策略已保存</span>' : `<span class="err">${(await res.json()).error}</span>`;
+}
+async function purgeNow() {
+  const res = await api('/api/settings/purge', { method: 'POST' });
+  const d = await res.json();
+  $('r-msg').innerHTML = res.ok
+    ? `<span class="ok">✓ 已清理：音频 ${d.audio}，转写 ${d.transcripts}，报告 ${d.reports}（审计留痕）</span>`
+    : `<span class="err">${esc(d.error)}</span>`;
+  loadAudit();
 }
 async function loadUsers() {
   const rows = await (await api('/api/users')).json();

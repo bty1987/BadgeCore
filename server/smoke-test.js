@@ -75,7 +75,7 @@ async function waitReady(child) {
       body: JSON.stringify({
         created_at: new Date().toISOString(), duration_s: 42.5,
         audio_path: 'D:/test/demo.ogg', device: 'sim-device', owner: '张三', topic: '冒烟测试沟通',
-        transcript: '说话人1: 您好，欢迎光临。说话人2: 我想看看新款，也对比了竞品A。说话人1: 明天我把详细方案发您邮箱。',
+        transcript: '说话人1: 您好，欢迎光临。说话人2: 我想看看新款，也对比了竞品A，我的手机是13812345678。说话人1: 明天我把详细方案发您邮箱。',
       }),
     });
     const ingestData = await ingest.json();
@@ -88,6 +88,8 @@ async function waitReady(child) {
     r = await api('GET', `/api/communications/${ingestData.id}`);
     const rp = r.data?.report;
     check('详情含转写全文', (r.data?.transcript || '').includes('竞品A'));
+    check('CMP-07 转写入库脱敏（手机号掩码）', (r.data?.transcript || '').includes('138****5678') && !(r.data?.transcript || '').includes('13812345678'));
+    check('CMP-07 报告输出层脱敏', !(JSON.stringify(rp || {}).includes('13812345678')));
     check('实时辅助告警：竞品提及入库（AI-09）', (r.data?.meta?.alerts || []).some(a => a.type === 'competitor' && a.word === '竞品A'));
     check('报告骨架完整', !!rp && ['summary', 'stance', 'competitors', 'intention', 'tasks', 'violations', 'todos', 'meta'].every(k => k in rp));
     check('竞品计数=1', rp?.competitors?.[0]?.name === '竞品A' && rp.competitors[0].mentions === 1);
@@ -151,6 +153,40 @@ async function waitReady(child) {
     check('手动补卡提交', r.status === 200);
     r = await api('GET', '/api/attendance');
     check('考勤记录列表（含补卡）', (r.data || []).length >= 2 && r.data.some(x => x.status === 'manual'));
+
+    // 10.5 CMP-08 留存 / CMP-13 水印 / AI-10 访前 / AI-11 定时
+    r = await api('PUT', '/api/settings', { retention: { audio_days: 30, transcript_days: 1095, report_days: 1095 } });
+    check('CMP-08 低于建议期被拒 400', r.status === 400 && /建议期/.test(r.data?.error || ''));
+    const oldAudio = path.join(os.tmpdir(), `badgecore-old-${Date.now()}.ogg`);
+    fs.writeFileSync(oldAudio, 'OGG');
+    const oldIngest = await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({ created_at: '2020-01-01T00:00:00Z', duration_s: 10, audio_path: oldAudio, transcript: '过期样本 13900001111' }),
+    });
+    check('过期样本入库（created_at=2020）', (await oldIngest.json()).id > 0);
+    r = await api('POST', '/api/settings/purge');
+    check('CMP-08 清理执行（音频删除+转写清空）', r.data?.audio >= 1 && r.data?.transcripts >= 1 && !fs.existsSync(oldAudio));
+
+    const exp = await fetch(BASE + `/api/communications/${ingestData.id}/export`, { headers: { Cookie: cookie } });
+    const expText = await exp.text();
+    check('CMP-13 导出水印（导出人+时间）', exp.status === 200 && expText.includes('导出人: admin') && expText.includes('水印'));
+    check('CMP-13 导出内容已脱敏', expText.includes('138****5678') && !expText.includes('13812345678'));
+
+    r = await api('POST', '/api/prep-visit', { customer: '张总', notes: '二次拜访' });
+    check('AI-10 访前准备（Mock 清单）', r.data?.plan?.questions?.length >= 3 && !!r.data.plan.background);
+
+    r = await api('POST', '/api/config/scheduled_reports', { name: '冒烟晨报', data: { time: '00:00', question: '竞品A 提及汇总', recipients: ['admin'] } });
+    const schedId = r.data?.id;
+    check('AI-11 创建定时报告', r.status === 200 && schedId > 0);
+    r = await api('POST', '/api/scheduled/run', { id: schedId });
+    check('AI-11 手动触发执行', r.status === 200);
+    r = await api('GET', '/api/notifications');
+    check('AI-11 站内信送达（未读≥1）', (r.data?.unread || 0) >= 1 && r.data.rows.some(n => n.title.includes('冒烟晨报')));
+    r = await api('POST', '/api/notifications/read');
+    check('AI-11 标记已读', r.status === 200);
+    r = await api('GET', '/api/notifications');
+    check('AI-11 已读后未读=0', r.data?.unread === 0);
+    await api('DELETE', `/api/config/scheduled_reports/${schedId}`);
 
     // 11. 审计
     r = await api('GET', '/api/audit');

@@ -22,6 +22,7 @@
     <a href="/attendance.html">考勤</a>
     <a href="/config.html">沟通配置</a>
     <a href="/settings.html">设置</a>
+    <a href="/notifications.html">消息</a>
   </nav>
   <span class="spacer"></span><span class="who" id="who"></span>
   <button onclick="location='/login.html'">退出</button>
@@ -36,6 +37,15 @@
     <div class="muted" style="margin-top:8px">回答仅基于你数据范围内的沟通记录与知识库/案例库（04 册配置），每条结论带来源编号；未配置真实 LLM 时为 Mock 摘要。</div>
   </div>
   <div class="card" id="history"></div>
+  <div class="card">
+    <h2>访前准备智能体（AI-10）</h2>
+    <div class="grid2">
+      <div><label>客户名称/关键词</label><input id="pv-customer" placeholder="例：张总 / ABC 装修"></div>
+      <div><label>备注（本次目的等）</label><input id="pv-notes" placeholder="例：二次拜访，谈报价方案"></div>
+    </div>
+    <div style="margin-top:10px"><button class="primary" onclick="prepVisit()">生成准备清单</button></div>
+    <div id="pv-out" style="margin-top:12px"></div>
+  </div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -63,6 +73,22 @@ async function ask() {
   div.querySelector('.a').innerHTML = res.ok
     ? esc(d.answer) + (d.sources?.length ? `<div class="src">来源：${d.sources.map(s => `<span title="${esc(s.snippet)}">[${s.n}] ${esc(s.title)}</span>`).join('')}</div><div class="footnote">以上内容由 AI 生成，仅供参考。</div>` : '')
     : `<span class="err">${esc(d.error)}</span>`;
+}
+async function prepVisit() {
+  const customer = $('pv-customer').value.trim();
+  if (!customer) { alert('请填客户名称/关键词'); return; }
+  $('pv-out').innerHTML = '<span class="muted">生成中…</span>';
+  const res = await api('/api/prep-visit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customer, notes: $('pv-notes').value.trim() }) });
+  const d = await res.json();
+  if (!res.ok) { $('pv-out').innerHTML = `<span class="err">${esc(d.error)}</span>`; return; }
+  const p = d.plan;
+  $('pv-out').innerHTML = `
+    <h3>客户背景</h3><div>${esc(p.background)}</div>
+    <h3>行业动态</h3><div>${esc(p.industry)}</div>
+    <h3>产品匹配建议</h3><div>${esc(p.match)}</div>
+    <h3>准备问题清单</h3><ul class="plain">${(p.questions || []).map(q => `<li>${esc(q)}</li>`).join('') || '<li class="muted">无</li>'}</ul>
+    <div class="footnote">以上内容由 AI 生成，仅供参考。</div>`;
 }
 init();
 </script>
