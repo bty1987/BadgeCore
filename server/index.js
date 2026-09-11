@@ -35,7 +35,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const CONFIG_DOMAINS = [ // 04 册沟通配置九大域（ADM-01x）+ 知识库/案例库/风险规则/定时报告（04 册 §2 菜单）
   'info_fields', 'deal_models', 'task_models', 'ability_models',
   'summary_templates', 'analysis_dims', 'flows', 'violations', 'competitors',
-  'knowledge_base', 'case_library', 'risk_rules', 'scheduled_reports',
+  'knowledge_base', 'case_library', 'risk_rules', 'scheduled_reports', 'insight_categories',
 ];
 const SESSION_TTL = 12 * 3600 * 1000;
 
@@ -129,6 +129,60 @@ function computeAlerts(transcript) {
     }
   }
   return alerts;
+}
+
+// ---------- 全局配置（ADM-20x 内部版子集，D16）与数据范围 ----------
+const GLOBAL_DEFAULTS = { view_scope: 'all', delete_min_role: 'manager', realtime_assist: true, analyze_first: true, silence_days: 14 };
+function loadGlobals() {
+  return { ...GLOBAL_DEFAULTS, ...(getSetting(db, 'globals') || {}) };
+}
+
+/** 部门子树内的用户名集合（manager 的部门数据范围，ADM-313） */
+function deptSubtreeUsers(userName) {
+  const u = db.prepare('SELECT dept_id FROM users WHERE name=?').get(userName);
+  if (!u || !u.dept_id) return [userName];
+  const kids = new Map();
+  for (const d of db.prepare('SELECT id, parent_id FROM depts').all()) {
+    kids.set(d.parent_id, [...(kids.get(d.parent_id) || []), d.id]);
+  }
+  const ids = [];
+  const stack = [u.dept_id];
+  while (stack.length) { const id = stack.pop(); ids.push(id); for (const k of kids.get(id) || []) stack.push(k); }
+  const ph = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT name FROM users WHERE dept_id IN (${ph})`).all(...ids).map(r => r.name).concat(userName);
+}
+
+/** 可见 owner 集合（null=全部；受全局配置 view_scope 与角色影响，ADM-202） */
+function visibleOwners(me) {
+  const g = loadGlobals();
+  if (me.role === 'admin') return g.view_scope === 'self' ? [me.name] : null;
+  if (me.role === 'manager') {
+    if (g.view_scope === 'self') return [me.name];
+    if (g.view_scope === 'dept') return deptSubtreeUsers(me.name);
+    return null;
+  }
+  return [me.name]; // sales 恒为本人
+}
+
+/** 沉默客户预警（风险预警·沉默型，b2b 14 天默认）：按客户最近沟通时间扫描，站内信通知负责人 */
+function checkSilence() {
+  const g = loadGlobals();
+  const days = Number(g.silence_days) || 0;
+  if (!days) return 0;
+  const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
+  const today = new Date().toISOString().slice(0, 10);
+  let n = 0;
+  for (const c of db.prepare('SELECT id, name, owner, last_comm_at, silence_notified_at FROM customers WHERE last_comm_at IS NOT NULL AND last_comm_at < ?').all(cutoff)) {
+    if (String(c.silence_notified_at || '').slice(0, 10) === today) continue; // 每客户每日最多提醒一次
+    const msg = `客户「${c.name}」已 ${days} 天无沟通记录（最近：${String(c.last_comm_at).slice(0, 10)}），请安排跟进。（沉默风险预警）`;
+    for (const user of c.owner ? [c.owner] : []) {
+      db.prepare('INSERT INTO notifications(user, title, body, created_at) VALUES(?,?,?,?)').run(user, '沉默风险预警', msg, new Date().toISOString());
+    }
+    db.prepare('UPDATE customers SET silence_notified_at=? WHERE id=?').run(new Date().toISOString(), c.id);
+    audit(db, 'scheduler', 'silence_alert', `customer#${c.id}`, `${days}天`);
+    n++;
+  }
+  return n;
 }
 
 /** Ask AI 检索（AI-08 简版 RAG，内部使用：滑窗关键词匹配，不依赖向量库） */
@@ -281,22 +335,48 @@ async function handleApi(req, res, url) {
     const got = req.headers['x-ingest-token'] || (await readBody(req)).token;
     if (!expect || got !== expect) throw new HttpError(401, '入库令牌无效');
     const b = await readBody(req);
+    const now = new Date().toISOString();
     const transcript = redactText(String(b.transcript || '')); // CMP-07：入库即脱敏（LLM/检索不接触明文）
-    const info = db.prepare('INSERT INTO communications(created_at, duration_s, audio_path, transcript, status, owner, topic, meta) VALUES(?,?,?,?,?,?,?,?)')
+
+    // 客户关联（REC-01：传 customer 名则查找或新建；先分析后关联 ADM-212 可入库后 PUT 补挂）
+    let customerId = null;
+    if (b.customer) {
+      const cname = redactText(String(b.customer)).trim();
+      const found = db.prepare('SELECT id FROM customers WHERE name=?').get(cname);
+      if (found) customerId = found.id;
+      else customerId = Number(db.prepare('INSERT INTO customers(name, owner, created_at, last_comm_at) VALUES(?,?,?,?)')
+        .run(cname, String(b.owner || ''), now, now).lastInsertRowid);
+    }
+
+    // 设备台账（04 册设备管理域）：会话自动注册/上线 + 操作日志
+    if (b.device) {
+      const key = redactText(String(b.device));
+      const dev = db.prepare('SELECT id FROM devices WHERE device_key=?').get(key);
+      if (dev) db.prepare('UPDATE devices SET status=?, last_seen_at=? WHERE id=?').run('online', now, dev.id);
+      else db.prepare('INSERT INTO devices(device_key, model, status, last_seen_at, created_at) VALUES(?,?,?,?,?)')
+        .run(key, String(b.device_model || ''), 'online', now, now);
+    }
+
+    const info = db.prepare('INSERT INTO communications(created_at, duration_s, audio_path, transcript, status, owner, topic, customer_id, plan_id, meta) VALUES(?,?,?,?,?,?,?,?,?,?)')
       .run(
-        b.created_at || new Date().toISOString(),
+        b.created_at || now,
         Number(b.duration_s) || 0,
         String(b.audio_path || ''),
         transcript,
         transcript ? 'transcribed' : 'recorded',
         String(b.owner || ''),
         String(b.topic || ''),
+        customerId,
+        b.plan_id ? Number(b.plan_id) : null,
         JSON.stringify({ device: b.device || '', source: b.source || 'receiver' }),
       );
     const id = Number(info.lastInsertRowid);
     audit(db, 'receiver', 'ingest', `comm#${id}`, `${Number(b.duration_s) || 0}s`);
-    // 实时辅助·规则预筛（AI-09）：竞品/风险词命中随记录下发并告警
-    const alerts = computeAlerts(transcript);
+    if (b.device) db.prepare('INSERT INTO device_logs(device_key, ts, action, detail) VALUES(?,?,?,?)')
+      .run(redactText(String(b.device)), now, 'session', `comm#${id} ${Number(b.duration_s) || 0}s`);
+    if (customerId) db.prepare('UPDATE customers SET last_comm_at=? WHERE id=?').run(b.created_at || now, customerId);
+    // 实时辅助·规则预筛（AI-09，受全局配置 realtime_assist 开关控制）
+    const alerts = loadGlobals().realtime_assist ? computeAlerts(transcript) : [];
     if (alerts.length) {
       db.prepare('UPDATE communications SET meta=? WHERE id=?')
         .run(JSON.stringify({ device: b.device || '', source: b.source || 'receiver', alerts }), id);
@@ -320,20 +400,27 @@ async function handleApi(req, res, url) {
   }
   if (pathname === '/api/me') return sendJson(res, 200, { name: me.name, role: me.role });
 
-  // 沟通记录
+  // 沟通记录（数据范围受全局配置 view_scope 影响，ADM-202/313）
   let m;
+  const myScope = () => {
+    const owners = visibleOwners(me);
+    if (!owners) return { sql: '', params: [] };
+    return { sql: `owner IN (${owners.map(() => '?').join(',')})`, params: owners };
+  };
   if ((m = pathname.match(/^\/api\/communications$/)) && method === 'GET') {
     const { q = '', status = '' } = Object.fromEntries(url.searchParams);
-    let sql = 'SELECT id, created_at, duration_s, status, owner, topic, report FROM communications';
+    let sql = 'SELECT id, created_at, duration_s, status, owner, topic, customer_id, plan_id, report FROM communications';
     const where = []; const params = [];
-    if (me.role === 'sales') { where.push('owner=?'); params.push(me.name); } // ADM-313 数据范围（sales=本人）
+    const scope = myScope();
+    if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
     if (status) { where.push('status=?'); params.push(status); }
     if (q) { where.push('(topic LIKE ? OR transcript LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
     if (where.length) sql += ' WHERE ' + where.join(' AND ');
     sql += ' ORDER BY id DESC LIMIT 500';
     const rows = db.prepare(sql).all(...params).map(r => {
       const report = r.report ? JSON.parse(r.report) : null;
-      return { ...r, report: undefined, summary: report?.summary || '', intention: report?.intention || null };
+      const cust = r.customer_id ? db.prepare('SELECT name FROM customers WHERE id=?').get(r.customer_id) : null;
+      return { ...r, report: undefined, customer: cust?.name || null, summary: report?.summary || '', intention: report?.intention || null };
     });
     return sendJson(res, 200, rows);
   }
@@ -341,13 +428,37 @@ async function handleApi(req, res, url) {
     const id = Number(m[1]);
     const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
     if (!row) throw new HttpError(404, '沟通记录不存在');
-    if (me.role === 'sales' && row.owner !== me.name) throw new HttpError(403, '无权查看该记录');
+    const owners = visibleOwners(me);
+    if (owners && !owners.includes(row.owner)) throw new HttpError(403, '无权访问该记录（数据范围）');
     if (method === 'GET') {
       row.report = row.report ? JSON.parse(row.report) : null;
       row.meta = JSON.parse(row.meta || '{}');
+      const cust = row.customer_id ? db.prepare('SELECT id, name FROM customers WHERE id=?').get(row.customer_id) : null;
+      row.customer = cust ? { id: cust.id, name: cust.name } : null;
       return sendJson(res, 200, row);
     }
-    if (method === 'DELETE' && me.role !== 'sales') {
+    if (method === 'PUT' && me.role !== 'sales') { // 先分析后关联（ADM-212）：补挂客户/计划/主题
+      const b = await readBody(req);
+      let customerId = row.customer_id;
+      if ('customer' in b) {
+        if (!b.customer) customerId = null;
+        else {
+          const cname = redactText(String(b.customer)).trim();
+          const found = db.prepare('SELECT id FROM customers WHERE name=?').get(cname);
+          customerId = found ? found.id : Number(db.prepare('INSERT INTO customers(name, owner, created_at, last_comm_at) VALUES(?,?,?,?)')
+            .run(cname, row.owner, new Date().toISOString(), row.created_at).lastInsertRowid);
+        }
+      }
+      db.prepare('UPDATE communications SET customer_id=?, plan_id=?, topic=? WHERE id=?')
+        .run(customerId, 'plan_id' in b ? (b.plan_id ? Number(b.plan_id) : null) : row.plan_id,
+          'topic' in b ? String(b.topic) : row.topic, id);
+      audit(db, me.name, 'comm_link', `comm#${id}`, b.customer || '');
+      return sendJson(res, 200, { ok: true, customer_id: customerId });
+    }
+    if (method === 'DELETE') { // 删除权限独立配置（ADM-203：delete_min_role）
+      const rank = { sales: 0, manager: 1, admin: 2 };
+      const minRole = loadGlobals().delete_min_role || 'manager';
+      if (rank[me.role] < rank[minRole]) throw new HttpError(403, `当前删除权限策略为「${minRole} 及以上」，无权删除`);
       db.prepare('DELETE FROM communications WHERE id=?').run(id);
       audit(db, me.name, 'delete_comm', `comm#${id}`);
       return sendJson(res, 200, { ok: true });
@@ -364,7 +475,8 @@ async function handleApi(req, res, url) {
     const id = Number(m[1]);
     const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
     if (!row) throw new HttpError(404, '沟通记录不存在');
-    if (me.role === 'sales' && row.owner !== me.name) throw new HttpError(403, '无权导出该记录');
+    const owners = visibleOwners(me);
+    if (owners && !owners.includes(row.owner)) throw new HttpError(403, '无权导出该记录');
     const report = row.report ? JSON.parse(row.report) : null;
     const text = [
       'BadgeCore 沟通记录导出',
@@ -396,6 +508,7 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, {
         llm: { ...llm, api_key: undefined, has_api_key: !!llm.api_key },
         retention: loadRetention(db),
+        globals: loadGlobals(),
         ingest_token: me.role === 'admin' ? token : undefined,
       });
     }
@@ -412,6 +525,17 @@ async function handleApi(req, res, url) {
         };
         setSetting(db, 'llm', next);
         audit(db, me.name, 'set_llm', `provider=${next.provider} model=${next.model}`);
+      }
+      if (b.globals) { // 全局配置（ADM-20x 内部版子集，D16）
+        const g = b.globals;
+        setSetting(db, 'globals', {
+          view_scope: ['all', 'dept', 'self'].includes(g.view_scope) ? g.view_scope : 'all',
+          delete_min_role: ['manager', 'admin', 'all'].includes(g.delete_min_role) ? g.delete_min_role : 'manager',
+          realtime_assist: g.realtime_assist !== false,
+          analyze_first: g.analyze_first !== false,
+          silence_days: Math.max(0, Number(g.silence_days) || 0),
+        });
+        audit(db, me.name, 'set_globals', JSON.stringify(g).slice(0, 120));
       }
       if (b.retention) { // CMP-08：不得低于建议下限
         const r = b.retention;
@@ -434,6 +558,9 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/settings/purge' && method === 'POST' && me.role === 'admin') {
     const result = runRetentionPurge(db);
     return sendJson(res, 200, result);
+  }
+  if (pathname === '/api/silence-check' && method === 'POST' && me.role === 'admin') {
+    return sendJson(res, 200, { notified: checkSilence() });
   }
   if (pathname === '/api/llm-test' && method === 'POST') {
     const llm = getSetting(db, 'llm');
@@ -504,6 +631,157 @@ async function handleApi(req, res, url) {
     }
     db.prepare('UPDATE users SET active=? WHERE id=?').run(m[2] === 'enable' ? 1 : 0, id);
     audit(db, me.name, `user_${m[2]}`, `user#${id}`);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // 客户管理（04 册 §2：列表/详情/画像；销售仅本人名下）
+  if (pathname === '/api/customers') {
+    if (method === 'GET') {
+      const { q = '' } = Object.fromEntries(url.searchParams);
+      let sql = 'SELECT * FROM customers';
+      const where = []; const params = [];
+      if (me.role === 'sales') { where.push('owner=?'); params.push(me.name); }
+      if (q) { where.push('(name LIKE ? OR note LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
+      if (where.length) sql += ' WHERE ' + where.join(' AND ');
+      const rows = db.prepare(sql + ' ORDER BY id DESC LIMIT 500').all(...params)
+        .map(c => ({ ...c, profile: JSON.parse(c.profile || '{}') }));
+      return sendJson(res, 200, rows);
+    }
+    if (method === 'POST') {
+      const b = await readBody(req);
+      if (!b.name) throw new HttpError(400, '需要客户名');
+      const r = db.prepare('INSERT INTO customers(name, phone, industry, profile, owner, note, created_at) VALUES(?,?,?,?,?,?,?)')
+        .run(redactText(String(b.name)), redactText(String(b.phone || '')), String(b.industry || ''),
+          JSON.stringify(b.profile || {}), String(b.owner || (me.role === 'sales' ? me.name : '')), String(b.note || ''), new Date().toISOString());
+      audit(db, me.name, 'customer_create', `customer#${r.lastInsertRowid}`, b.name);
+      return sendJson(res, 200, { id: Number(r.lastInsertRowid) });
+    }
+  }
+  if ((m = pathname.match(/^\/api\/customers\/(\d+)$/))) {
+    const id = Number(m[1]);
+    const row = db.prepare('SELECT * FROM customers WHERE id=?').get(id);
+    if (!row) throw new HttpError(404, '客户不存在');
+    if (me.role === 'sales' && row.owner !== me.name) throw new HttpError(403, '仅本人名下客户');
+    if (method === 'GET') { // 客户详情 + 历史沟通（ANA-11 上次沟通回顾的数据底座）
+      row.profile = JSON.parse(row.profile || '{}');
+      const owners = visibleOwners(me);
+      const comms = db.prepare(`SELECT id, created_at, duration_s, status, topic, report FROM communications WHERE customer_id=? ${owners ? `AND owner IN (${owners.map(() => '?').join(',')})` : ''} ORDER BY id DESC LIMIT 20`)
+        .all(id, ...(owners || [])).map(r => {
+          const rp = r.report ? JSON.parse(r.report) : null;
+          return { ...r, report: undefined, summary: rp?.summary || '' };
+        });
+      return sendJson(res, 200, { ...row, comms });
+    }
+    if (method === 'PUT') {
+      const b = await readBody(req);
+      db.prepare('UPDATE customers SET name=?, phone=?, industry=?, profile=?, owner=?, note=? WHERE id=?')
+        .run(redactText(String(b.name ?? row.name)), redactText(String(b.phone ?? row.phone)), String(b.industry ?? row.industry),
+          JSON.stringify(b.profile ?? JSON.parse(row.profile || '{}')), String(b.owner ?? row.owner), String(b.note ?? row.note), id);
+      audit(db, me.name, 'customer_update', `customer#${id}`);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (method === 'DELETE') {
+      if (me.role === 'sales') throw new HttpError(403, '销售不可删客户');
+      db.prepare('DELETE FROM customers WHERE id=?').run(id);
+      audit(db, me.name, 'customer_delete', `customer#${id}`);
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  // 沟通计划（REC-02 安排沟通）
+  if (pathname === '/api/plans') {
+    if (method === 'GET') {
+      let sql = 'SELECT p.*, c.name AS customer_name FROM plans p LEFT JOIN customers c ON p.customer_id=c.id';
+      const where = []; const params = [];
+      if (me.role === 'sales') { where.push('p.owner=?'); params.push(me.name); }
+      if (where.length) sql += ' WHERE ' + where.join(' AND ');
+      return sendJson(res, 200, db.prepare(sql + ' ORDER BY plan_at DESC LIMIT 200').all(...params));
+    }
+    if (method === 'POST') {
+      const b = await readBody(req);
+      if (!b.title) throw new HttpError(400, '需要标题');
+      const r = db.prepare('INSERT INTO plans(title, customer_id, owner, plan_at, flow, info_fields, created_at) VALUES(?,?,?,?,?,?,?)')
+        .run(String(b.title), b.customer_id ? Number(b.customer_id) : null,
+          String(b.owner || (me.role === 'sales' ? me.name : '')), b.plan_at || '', String(b.flow || ''),
+          JSON.stringify(b.info_fields || {}), new Date().toISOString());
+      audit(db, me.name, 'plan_create', `plan#${r.lastInsertRowid}`, b.title);
+      return sendJson(res, 200, { id: Number(r.lastInsertRowid) });
+    }
+  }
+  if ((m = pathname.match(/^\/api\/plans\/(\d+)(\/complete)?$/))) {
+    const id = Number(m[1]);
+    if (m[2] && method === 'POST') { // 标记完成（沟通结束后）
+      db.prepare('UPDATE plans SET status=? WHERE id=?').run('done', id);
+      audit(db, me.name, 'plan_done', `plan#${id}`);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (method === 'DELETE') {
+      db.prepare('DELETE FROM plans WHERE id=?').run(id);
+      audit(db, me.name, 'plan_delete', `plan#${id}`);
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  // 设备管理（04 册：台账/绑定/操作日志；固件升级缓期 D16——receiver OTA 即开发期通道）
+  if (pathname === '/api/devices' && method === 'GET') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者可看台账');
+    return sendJson(res, 200, db.prepare('SELECT * FROM devices ORDER BY id DESC LIMIT 500').all());
+  }
+  if ((m = pathname.match(/^\/api\/devices\/(\d+)\/bind$/)) && method === 'POST') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者可绑定');
+    const b = await readBody(req);
+    const dev = db.prepare('SELECT * FROM devices WHERE id=?').get(Number(m[1]));
+    if (!dev) throw new HttpError(404, '设备不存在');
+    db.prepare('UPDATE devices SET owner=?, model=? WHERE id=?').run(String(b.owner || ''), String(b.model ?? dev.model), dev.id);
+    db.prepare('INSERT INTO device_logs(device_key, ts, action, detail) VALUES(?,?,?,?)')
+      .run(dev.device_key, new Date().toISOString(), b.owner ? 'bind' : 'unbind', `${dev.owner || '-'} → ${b.owner || '(解绑)'}`);
+    audit(db, me.name, b.owner ? 'device_bind' : 'device_unbind', dev.device_key, String(b.owner || ''));
+    return sendJson(res, 200, { ok: true });
+  }
+  if (pathname === '/api/devices/logs' && method === 'GET') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者');
+    return sendJson(res, 200, db.prepare('SELECT * FROM device_logs ORDER BY id DESC LIMIT 300').all());
+  }
+
+  // 组织架构（ADM-301 部门树；角色权限自定义树缓期 D16——内部三角色够用）
+  if (pathname === '/api/depts') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者');
+    if (method === 'GET') {
+      const rows = db.prepare('SELECT * FROM depts ORDER BY id').all();
+      const counts = db.prepare('SELECT dept_id, COUNT(*) c FROM users WHERE dept_id IS NOT NULL GROUP BY dept_id').all();
+      const cmap = new Map(counts.map(r => [r.dept_id, r.c]));
+      return sendJson(res, 200, rows.map(d => ({ ...d, member_count: cmap.get(d.id) || 0 })));
+    }
+    if (method === 'POST') {
+      const b = await readBody(req);
+      if (!b.name) throw new HttpError(400, '需要部门名');
+      const r = db.prepare('INSERT INTO depts(name, parent_id, leader) VALUES(?,?,?)')
+        .run(String(b.name), b.parent_id ? Number(b.parent_id) : null, String(b.leader || ''));
+      audit(db, me.name, 'dept_create', `dept#${r.lastInsertRowid}`, b.name);
+      return sendJson(res, 200, { id: Number(r.lastInsertRowid) });
+    }
+  }
+  if ((m = pathname.match(/^\/api\/depts\/(\d+)$/))) {
+    if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
+    if (method === 'PUT') {
+      const b = await readBody(req);
+      db.prepare('UPDATE depts SET name=?, parent_id=?, leader=? WHERE id=?')
+        .run(String(b.name), b.parent_id ? Number(b.parent_id) : null, String(b.leader || ''), Number(m[1]));
+      audit(db, me.name, 'dept_update', `dept#${m[1]}`);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (method === 'DELETE') {
+      db.prepare('UPDATE users SET dept_id=NULL WHERE dept_id=?').run(Number(m[1]));
+      db.prepare('UPDATE depts SET parent_id=NULL WHERE parent_id=?').run(Number(m[1]));
+      db.prepare('DELETE FROM depts WHERE id=?').run(Number(m[1]));
+      audit(db, me.name, 'dept_delete', `dept#${m[1]}`);
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+  if ((m = pathname.match(/^\/api\/users\/(\d+)\/dept$/)) && method === 'POST' && me.role === 'admin') {
+    const b = await readBody(req);
+    db.prepare('UPDATE users SET dept_id=? WHERE id=?').run(b.dept_id ? Number(b.dept_id) : null, Number(m[1]));
+    audit(db, me.name, 'user_dept', `user#${m[1]}`, String(b.dept_id || ''));
     return sendJson(res, 200, { ok: true });
   }
 
@@ -637,6 +915,8 @@ function startScheduler() {
 seed();
 try { const purged = runRetentionPurge(db); console.log(`[留存] 启动清理：音频 ${purged.audio}，转写 ${purged.transcripts}，报告 ${purged.reports}（180天/3年，CMP-08）`); } catch (e) { console.error('[留存] 启动清理失败:', e.message); }
 setInterval(() => { try { runRetentionPurge(db); } catch { /* 下轮再试 */ } }, 24 * 3600 * 1000).unref();
+setInterval(() => { try { checkSilence(); } catch (e) { console.error('[沉默预警]', e.message); } }, 3600 * 1000).unref(); // 风险预警·沉默型（D16）
+try { checkSilence(); } catch { /* 启动时静默尝试 */ }
 startScheduler();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);

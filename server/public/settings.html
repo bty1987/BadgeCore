@@ -11,8 +11,10 @@
   <span class="brand">BadgeCore</span>
   <nav>
     <a href="/">沟通记录</a>
+    <a href="/customers.html">客户</a>
     <a href="/ask.html">Ask AI</a>
     <a href="/attendance.html">考勤</a>
+    <a href="/devices.html">设备</a>
     <a href="/config.html">沟通配置</a>
     <a href="/settings.html" class="active">设置</a>
     <a href="/notifications.html">消息</a>
@@ -65,6 +67,52 @@
         </div>
         <div id="r-msg" class="muted" style="margin-top:10px">到期自动删除（启动时+每日+手动），清理动作写入审计作为删除证明；天数不可低于建议期。</div>
       </div>
+    </div>
+  </div>
+
+  <div class="card" id="card-globals">
+    <h2>全局配置（ADM-20x 内部版子集，D16）</h2>
+    <div class="grid2">
+      <div>
+        <label>沟通记录查看范围（ADM-202）</label>
+        <select id="g-view-scope">
+          <option value="all">全员可见（manager 及以上看全部）</option>
+          <option value="dept">按部门（manager 看本部门及子部门）</option>
+          <option value="self">仅本人</option>
+        </select>
+        <label>沟通记录删除权限（ADM-203）</label>
+        <select id="g-delete-role">
+          <option value="manager">manager 及以上</option>
+          <option value="admin">仅管理员</option>
+          <option value="all">所有人（销售限本人记录）</option>
+        </select>
+      </div>
+      <div>
+        <label>沉默预警天数（0=关闭；客户超 N 天无沟通通知负责人）</label><input id="g-silence" type="number" min="0" value="14">
+        <label style="display:flex;align-items:center;gap:6px;margin-top:14px"><input type="checkbox" id="g-assist" style="width:auto"> 实时辅助告警（ADM-213，入库竞品/风险词检测）</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="g-analyze-first" style="width:auto"> 先分析后关联客户（ADM-212，沟通完成再补挂客户）</label>
+        <div style="margin-top:14px"><button class="primary" onclick="saveGlobals()">保存全局配置</button></div>
+        <div id="g-msg" class="muted" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="card-org">
+    <h2>组织架构（ADM-301 部门树；用户挂部门后 manager 可按部门看数据）</h2>
+    <table id="dept-tbl"><thead><tr><th>ID</th><th>部门</th><th>上级</th><th>负责人</th><th>人数</th><th>操作</th></tr></thead><tbody></tbody></table>
+    <details style="margin-top:10px"><summary>＋ 新增部门</summary>
+      <div class="grid2" style="margin-top:8px">
+        <div><label>部门名</label><input id="d-name"></div>
+        <div><label>上级部门 ID（留空=顶级）</label><input id="d-parent" type="number"></div>
+        <div><label>负责人</label><input id="d-leader"></div>
+      </div>
+      <div style="margin-top:8px"><button class="primary" onclick="addDept()">新增</button></div>
+    </details>
+    <h3>用户挂部门</h3>
+    <div style="display:flex;gap:8px;align-items:end">
+      <div style="flex:1"><label>用户</label><select id="u-dept-user"></select></div>
+      <div style="flex:1"><label>部门</label><select id="u-dept-dept"></select></div>
+      <button onclick="assignDept()">挂靠</button>
     </div>
   </div>
 
@@ -125,10 +173,17 @@ async function init() {
       `set BADGE_TOKEN=${s.ingest_token}\n` +
       `node receiver.js`;
   } else { $('card-recv').style.display = 'none'; }
+  if (s.globals) {
+    $('g-view-scope').value = s.globals.view_scope;
+    $('g-delete-role').value = s.globals.delete_min_role;
+    $('g-silence').value = s.globals.silence_days;
+    $('g-assist').checked = !!s.globals.realtime_assist;
+    $('g-analyze-first').checked = !!s.globals.analyze_first;
+  }
   if (ME.role !== 'admin') {
-    $('card-users').style.display = 'none'; $('card-audit').style.display = 'none';
+    $('card-users').style.display = 'none'; $('card-audit').style.display = 'none'; $('card-org').style.display = 'none';
   } else {
-    loadUsers(); loadAudit();
+    loadUsers(); loadAudit(); loadDepts();
   }
 }
 async function saveLlm() {
@@ -187,6 +242,43 @@ async function resetPass(id, name) {
   await api(`/api/users/${id}/resetpass`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }) });
   loadAudit();
 }
+
+async function saveGlobals() {
+  const globals = {
+    view_scope: $('g-view-scope').value, delete_min_role: $('g-delete-role').value,
+    silence_days: Number($('g-silence').value) || 0,
+    realtime_assist: $('g-assist').checked, analyze_first: $('g-analyze-first').checked,
+  };
+  const res = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ globals }) });
+  $('g-msg').innerHTML = res.ok ? '<span class="ok">✓ 已保存</span>' : `<span class="err">${(await res.json()).error}</span>`;
+}
+async function loadDepts() {
+  const depts = await (await api('/api/depts')).json();
+  $('dept-tbl').querySelector('tbody').innerHTML = depts.map(d => `
+    <tr><td>${d.id}</td><td>${esc(d.name)}</td><td>${d.parent_id || '-'}</td><td>${esc(d.leader) || '-'}</td><td>${d.member_count}</td>
+    <td>${ME.role === 'admin' ? `<button class="danger" onclick="delDept(${d.id}, '${esc(d.name)}')">删除</button>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="6" class="muted">暂无部门。</td></tr>';
+  const users = await (await api('/api/users')).json();
+  $('u-dept-user').innerHTML = users.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('');
+  $('u-dept-dept').innerHTML = '<option value="">（解除挂靠）</option>' + depts.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+}
+async function addDept() {
+  const res = await api('/api/depts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: $('d-name').value, parent_id: Number($('d-parent').value) || null, leader: $('d-leader').value }) });
+  const d = await res.json();
+  if (!res.ok) { alert(d.error); return; }
+  $('d-name').value = ''; $('d-leader').value = ''; $('d-parent').value = ''; loadDepts();
+}
+async function delDept(id, name) {
+  if (!confirm(`删除部门「${name}」？成员与子部门将上移/解除。`)) return;
+  await api(`/api/depts/${id}`, { method: 'DELETE' }); loadDepts(); loadUsers();
+}
+async function assignDept() {
+  await api(`/api/users/${$('u-dept-user').value}/dept`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dept_id: Number($('u-dept-dept').value) || null }) });
+  loadDepts(); loadUsers();
+}
+
 async function loadAudit() {
   const rows = await (await api('/api/audit')).json();
   $('audit-body').innerHTML = rows.map(a => `

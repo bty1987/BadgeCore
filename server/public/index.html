@@ -13,6 +13,7 @@
     <a href="/" class="active">沟通记录</a>
     <a href="/ask.html">Ask AI</a>
     <a href="/attendance.html">考勤</a>
+    <a href="/devices.html">设备</a>
     <a href="/config.html">沟通配置</a>
     <a href="/settings.html">设置</a>
     <a href="/notifications.html">消息</a>
@@ -100,7 +101,7 @@ async function load() {
 async function detail(id) {
   const r = await (await api(`/api/communications/${id}`)).json();
   $('d-title').textContent = `#${r.id} ${r.topic || '(未命名沟通)'}`;
-  $('d-meta').textContent = `${fmtTime(r.created_at)} · ${r.duration_s.toFixed(0)}s · 归属 ${r.owner || '-'} · ${r.meta?.device || ''}`;
+  $('d-meta').textContent = `${fmtTime(r.created_at)} · ${r.duration_s.toFixed(0)}s · 归属 ${r.owner || '-'} · 客户 ${r.customer?.name || '（未关联）'} · ${r.meta?.device || ''}`;
   $('d-actions').innerHTML = `
     ${(r.meta?.alerts || []).map(a => `<span class="badge ${a.level === 'high' ? 'high' : 'mid'}" title="${esc(a.rule || '')}">${a.type === 'competitor' ? '竞品提及' : '风险词'}·${esc(a.word)}</span>`).join(' ')}
     <button class="primary" onclick="analyze(${id})">${r.report ? '重新分析' : '生成分析报告'}</button>

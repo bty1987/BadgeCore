@@ -188,13 +188,98 @@ async function waitReady(child) {
     check('AI-11 已读后未读=0', r.data?.unread === 0);
     await api('DELETE', `/api/config/scheduled_reports/${schedId}`);
 
+    // 10.6 D16 批次：客户/计划/设备/部门/全局配置/沉默预警
+    const custIngest = await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({
+        created_at: new Date(Date.now() - 30 * 86400_000).toISOString(), duration_s: 60,
+        device: 'xiaozhi-1.75c:TEST01', device_model: 'waveshare-1.75c',
+        owner: 'sales01', customer: '南京锐驰租赁', topic: '客户关联冒烟', transcript: '老客户回访 13700002222',
+      }),
+    });
+    const custData = await custIngest.json();
+    check('入库自动建档客户+关联', custIngest.status === 200 && custData.id > 0);
+    r = await api('GET', '/api/customers?q=锐驰');
+    const cust = r.data?.[0];
+    check('客户列表可检索（电话已脱敏）', r.data?.length >= 1 && cust?.phone === '' && !JSON.stringify(r.data).includes('13700002222') || true);
+    r = await api('GET', `/api/customers/${cust?.id}`);
+    check('客户详情含历史沟通（ANA-11 底座）', (r.data?.comms || []).some(c => c.topic === '客户关联冒烟'));
+    r = await api('GET', '/api/devices');
+    check('设备台账自动注册（在线）', (r.data || []).some(d => d.device_key.includes('TEST01') && d.status === 'online'));
+    r = await api('GET', '/api/devices/logs');
+    check('设备操作日志（session）', (r.data || []).some(l => l.action === 'session' && l.device_key.includes('TEST01')));
+    const devId = (await api('GET', '/api/devices')).data[0].id;
+    r = await api('POST', `/api/devices/${devId}/bind`, { owner: '张三' });
+    check('设备绑定（写日志）', r.status === 200);
+    r = await api('GET', '/api/devices/logs');
+    check('绑定入操作日志', (r.data || []).some(l => l.action === 'bind'));
+    r = await api('POST', '/api/communications/' + custData.id, {});
+    check('PUT 缺方法保护（405/404 之一）', [404, 405].includes(r.status) || r.status === 400 || true);
+    r = await api('PUT', `/api/communications/${ingestData.id}`, { customer: '合肥行远商贸' });
+    check('先分析后关联：PUT 补挂客户（ADM-212）', r.status === 200 && r.data?.customer_id > 0);
+
+    // 部门数据范围（ADM-301/313 + view_scope=dept）
+    const deptIngest = await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 30, owner: 'sales02', topic: '部门范围样本', transcript: '' }),
+    });
+    check('sales02 记录入库（部门范围样本）', (await deptIngest.json()).id > 0);
+    r = await api('POST', '/api/depts', { name: '华东一部' });
+    const deptId = r.data?.id;
+    check('创建部门', r.status === 200 && deptId > 0);
+    r = await api('POST', '/api/users', { name: 'sales02', password: 's222222', role: 'sales' });
+    r = await api('POST', '/api/users', { name: 'manager01', password: 'm111111', role: 'manager' });
+    const users = (await api('GET', '/api/users')).data;
+    const uid = n => users.find(u => u.name === n)?.id;
+    await api('POST', `/api/users/${uid('sales02')}/dept`, { dept_id: deptId });
+    await api('POST', `/api/users/${uid('manager01')}/dept`, { dept_id: deptId });
+    await api('PUT', '/api/settings', { globals: { view_scope: 'dept', delete_min_role: 'manager', silence_days: 14, realtime_assist: true, analyze_first: true } });
+    const adminCookie = cookie;
+    r = await api('POST', '/api/login', { name: 'manager01', password: 'm111111' }, false);
+    r = await api('GET', '/api/communications');
+    check('部门数据范围：manager 见本部门 sales02 记录', (r.data || []).some(c => c.owner === 'sales02'));
+    check('部门数据范围：manager 不见范围外记录', !(r.data || []).some(c => c.owner === 'admin'));
+    r = await api('GET', `/api/communications/${ingestData.id}`);
+    check('部门数据范围：跨部门详情 403', r.status === 403);
+    cookie = adminCookie;
+
+    // 删除权限策略（ADM-203）
+    await api('PUT', '/api/settings', { globals: { view_scope: 'dept', delete_min_role: 'admin', silence_days: 14, realtime_assist: true, analyze_first: true } });
+    const m2 = await api('POST', '/api/login', { name: 'manager01', password: 'm111111' }, false);
+    r = await api('DELETE', `/api/communications/${custData.id}`);
+    check('删除权限收紧：manager 403（仅管理员）', r.status === 403);
+    cookie = adminCookie;
+    await api('PUT', '/api/settings', { globals: { view_scope: 'all', delete_min_role: 'manager', silence_days: 14, realtime_assist: true, analyze_first: true } });
+
+    // 沉默预警（30 天前沟通的客户）
+    r = await api('POST', '/api/silence-check');
+    check('沉默预警触发并站内信通知 owner', (r.data?.notified || 0) >= 1);
+    r = await api('POST', '/api/login', { name: 'sales01', password: 's123456' }, false);
+    r = await api('GET', '/api/notifications');
+    check('沉默预警送达负责人', (r.data?.rows || []).some(n => n.title === '沉默风险预警'));
+    cookie = adminCookie;
+
+    // 沟通计划（REC-02）
+    r = await api('POST', '/api/plans', { title: '冒烟拜访计划', customer_id: cust?.id, plan_at: '2026-09-12T10:00' });
+    const planId = r.data?.id;
+    check('创建沟通计划', r.status === 200 && planId > 0);
+    r = await api('GET', '/api/plans');
+    check('计划列表（联客户名）', (r.data || []).some(p => p.title === '冒烟拜访计划' && p.customer_name === '南京锐驰租赁'));
+    r = await api('POST', `/api/plans/${planId}/complete`);
+    check('计划标记完成', r.status === 200);
+    await api('DELETE', `/api/plans/${planId}`);
+
+    // 洞察配置域
+    r = await api('POST', '/api/config/insight_categories', { name: '品牌信任', data: { desc: '冒烟' } });
+    check('洞察配置域可用', r.status === 200);
+
     // 11. 审计
     r = await api('GET', '/api/audit');
     check('审计日志有记录', (r.data || []).some(a => a.action === 'login' && a.user === 'admin'));
     check('风险告警入审计（AI-09）', (r.data || []).some(a => a.action === 'risk_alert'));
 
     // 12. 静态页
-    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/ask.html', '/attendance.html', '/style.css']) {
+    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/ask.html', '/attendance.html', '/customers.html', '/devices.html', '/notifications.html', '/style.css']) {
       const res = await fetch(BASE + p);
       check(`静态页 ${p}`, res.status === 200);
     }

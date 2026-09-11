@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>客户管理 · BadgeCore</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">BadgeCore</span>
+  <nav>
+    <a href="/">沟通记录</a>
+    <a href="/customers.html" class="active">客户</a>
+    <a href="/ask.html">Ask AI</a>
+    <a href="/attendance.html">考勤</a>
+    <a href="/devices.html">设备</a>
+    <a href="/config.html">沟通配置</a>
+    <a href="/settings.html">设置</a>
+    <a href="/notifications.html">消息</a>
+  </nav>
+  <span class="spacer"></span><span class="who" id="who"></span>
+  <button onclick="location='/login.html'">退出</button>
+</div>
+<div class="wrap">
+  <div class="card">
+    <h2>客户管理（04 册：列表 / 画像 / 历史沟通）</h2>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="q" placeholder="搜索客户名/备注…" onkeydown="if(event.key==='Enter')load()">
+      <button onclick="load()">搜索</button>
+    </div>
+    <table>
+      <thead><tr><th>客户</th><th>电话</th><th>行业</th><th>负责人</th><th>最近沟通</th><th>沉默预警</th><th>操作</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <details style="margin-top:12px"><summary>＋ 新增客户</summary>
+      <div class="grid2" style="margin-top:8px">
+        <div><label>客户名</label><input id="n-name"></div>
+        <div><label>电话</label><input id="n-phone"></div>
+        <div><label>行业</label><input id="n-industry"></div>
+        <div><label>负责人</label><input id="n-owner" placeholder="留空=自己"></div>
+      </div>
+      <label>画像（JSON，企业自定义字段）</label><textarea id="n-profile">{}</textarea>
+      <div style="margin-top:8px"><button class="primary" onclick="create()">保存</button></div>
+    </details>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button onclick="drawer.classList.remove('open')" style="float:right">✕ 关闭</button>
+  <h2 id="d-title"></h2>
+  <div class="muted" id="d-meta"></div>
+  <h3>客户画像</h3><pre id="d-profile" style="background:#f8f9fb;border-radius:6px;padding:12px"></pre>
+  <h3>历史沟通（ANA-11 上次沟通回顾）</h3>
+  <div id="d-comms"></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const drawer = $('drawer');
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { location.href = '/login.html'; throw 0; }
+  return res;
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = iso => iso ? iso.replace('T', ' ').slice(0, 16) : '-';
+let me_role = 'sales';
+async function load() {
+  const rows = await (await api('/api/customers?q=' + encodeURIComponent($('q').value))).json();
+  $('tbody').innerHTML = rows.map(c => {
+    const days = c.last_comm_at ? Math.floor((Date.now() - new Date(c.last_comm_at)) / 86400000) : null;
+    return `<tr>
+      <td><a href="#" onclick="detail(${c.id});return false">${esc(c.name)}</a></td>
+      <td>${esc(c.phone) || '-'}</td><td>${esc(c.industry) || '-'}</td><td>${esc(c.owner) || '-'}</td>
+      <td>${fmt(c.last_comm_at)}</td>
+      <td>${days !== null && days > 14 ? `<span class="badge high">${days} 天未沟通</span>` : '-'}</td>
+      <td>${me_role !== 'sales' ? `<button class="danger" onclick="del(${c.id}, '${esc(c.name)}')">删除</button>` : ''}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted" style="padding:14px">暂无客户。入库时带 customer 字段或沟通详情页可补挂。</td></tr>';
+}
+async function detail(id) {
+  const c = await (await api(`/api/customers/${id}`)).json();
+  $('d-title').textContent = c.name;
+  $('d-meta').textContent = `负责人 ${c.owner || '-'} · 最近沟通 ${fmt(c.last_comm_at)} · 备注 ${c.note || '-'}`;
+  $('d-profile').textContent = JSON.stringify(c.profile, null, 2);
+  $('d-comms').innerHTML = (c.comms || []).map(x => `
+    <div style="border-bottom:1px solid #f0f1f3;padding:8px 0">
+      <a href="/" onclick="sessionStorage.setItem('openComm',${x.id})">${fmt(x.created_at)} · ${esc(x.topic) || '(未命名)'}</a>
+      <div class="muted">${esc(x.summary).slice(0, 100)}</div>
+    </div>`).join('') || '<div class="muted">该客户暂无沟通记录。</div>';
+  drawer.classList.add('open');
+}
+async function create() {
+  let profile; try { profile = JSON.parse($('n-profile').value); } catch { alert('画像 JSON 有误'); return; }
+  const res = await api('/api/customers', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: $('n-name').value, phone: $('n-phone').value, industry: $('n-industry').value, owner: $('n-owner').value, profile }) });
+  const d = await res.json();
+  if (!res.ok) { alert(d.error); return; }
+  $('n-name').value = ''; $('n-phone').value = ''; load();
+}
+async function del(id, name) {
+  if (!confirm(`确认删除客户「${name}」？沟通记录保留，仅解除关联。`)) return;
+  await api(`/api/customers/${id}`, { method: 'DELETE' }); load();
+}
+(async () => { const me = await (await api('/api/me')).json(); me_role = me.role; $('who').textContent = `${me.name}（${me.role}）`; await load(); })();
+</script>
+</body>
+</html>

@@ -11,8 +11,10 @@
   <span class="brand">BadgeCore</span>
   <nav>
     <a href="/">沟通记录</a>
+    <a href="/customers.html">客户</a>
     <a href="/ask.html">Ask AI</a>
     <a href="/attendance.html">考勤</a>
+    <a href="/devices.html">设备</a>
     <a href="/config.html" class="active">沟通配置</a>
     <a href="/settings.html">设置</a>
     <a href="/notifications.html">消息</a>
@@ -56,6 +58,7 @@ const DOMAINS = {
   knowledge_base:   { label: '知识库',     help: 'data: {content:"知识内容（FAQ/异议处理/商务政策…）"} → Ask AI 检索来源' },
   case_library:     { label: '案例库',     help: 'data: {scenario:"适用场景", script:"金牌话术"} → Ask AI 检索来源' },
   risk_rules:       { label: '风险预警',   help: 'data: {keywords:["风险词","回扣"], level:"high|mid"} → 新沟通命中关键词即自动告警（AI-09 规则层）' },
+  insight_categories:{ label: '洞察配置',   help: 'data: {desc:"分类说明"}，name 即洞察分类（品牌信任/商务报价/产品价值…，04 册洞察配置）' },
   scheduled_reports:{ label: '定时报告',   help: 'data: {time:"08:30", question:"昨天竞品提及汇总", recipients:["admin"]} → 每日到点自动跑 Ask AI 并站内信推送（AI-11）' },
 };
 let domain = 'deal_models', ME = null;

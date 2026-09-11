@@ -13,8 +13,55 @@ CREATE TABLE IF NOT EXISTS users(
   pass_hash TEXT NOT NULL,
   salt TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'sales',        -- admin | manager | sales
+  dept_id INTEGER,                           -- 所属部门（组织架构，ADM-301）
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS depts(            -- 部门树（ADM-301，parent_id 成树）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER,
+  leader TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS customers(        -- 客户管理（04 册 §2 / 08 册销售端客户列表）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  phone TEXT DEFAULT '',
+  industry TEXT DEFAULT '',
+  profile TEXT DEFAULT '{}',                 -- 画像自定义字段（JSON，企业自行约定）
+  owner TEXT DEFAULT '',                     -- 负责销售
+  note TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  last_comm_at TEXT                          -- 最近沟通时间（沉默预警用，ALL/风险预警）
+);
+CREATE TABLE IF NOT EXISTS plans(            -- 沟通计划（REC-02 安排沟通）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  customer_id INTEGER,
+  owner TEXT DEFAULT '',
+  plan_at TEXT,                              -- 计划时间
+  flow TEXT DEFAULT '',                      -- 关联沟通流程名
+  info_fields TEXT DEFAULT '{}',             -- 需采集的信息收集字段值
+  status TEXT DEFAULT 'planned',             -- planned | done
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS devices(          -- 设备台账（04 册设备管理域，ADM 联动 05 册）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_key TEXT UNIQUE NOT NULL,           -- 设备标识（接收端上报，如 xiaozhi-1.75c:<device-id>）
+  model TEXT DEFAULT '',
+  fw_version TEXT DEFAULT '',
+  owner TEXT DEFAULT '',                     -- 持有人
+  battery TEXT DEFAULT '',
+  status TEXT DEFAULT 'offline',             -- online | offline
+  last_seen_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS device_logs(      -- 设备操作日志（对标 ★ badge operation-log）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_key TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  action TEXT NOT NULL,                      -- bind | unbind | session | offline
+  detail TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS communications(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,6 +73,8 @@ CREATE TABLE IF NOT EXISTS communications(
   status TEXT NOT NULL DEFAULT 'recorded',    -- recorded | transcribed | analyzed | failed
   owner TEXT DEFAULT '',
   topic TEXT DEFAULT '',
+  customer_id INTEGER,                        -- 关联客户（先分析后关联 ADM-212）
+  plan_id INTEGER,                            -- 关联沟通计划（REC-02）
   meta TEXT DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS config_items(
@@ -71,6 +120,14 @@ function openDb(dbFile) {
   fs.mkdirSync(path.dirname(dbFile), { recursive: true });
   const db = new DatabaseSync(dbFile);
   db.exec(SCHEMA);
+  // 旧库迁移：新增列（已存在则忽略）
+  for (const [table, col, type] of [
+    ['communications', 'customer_id', 'INTEGER'],
+    ['communications', 'plan_id', 'INTEGER'],
+    ['customers', 'silence_notified_at', 'TEXT'],
+  ]) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch { /* 列已存在 */ }
+  }
   return db;
 }
 
