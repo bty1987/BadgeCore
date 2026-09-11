@@ -35,9 +35,10 @@ BadgeCore/
 ├── hardware/              ← 硬件开发日志（选型/采购/到货清单/协议要点）
 │   └── receiver/          ← 接收服务端（录制+实时转写+模拟设备，Node.js）
 ├── server/                ← 管理后台 + LLM 分析管道（零依赖栈 D13）
-│   ├── index.js           ← API + 静态页服务（8200）
+│   ├── index.js           ← API + 静态页服务 + AI-11 调度器（8200）
 │   ├── analysis.js        ← 沟通分析管道（OpenAI 兼容 + Mock）
-│   ├── smoke-test.js      ← 冒烟测试（33 项）
+│   ├── redact.js · retention.js · attendance.js ← 合规与算法模块（含 CLI 自测）
+│   ├── smoke-test.js      ← 冒烟测试（58 项）
 │   └── public/            ← Web 前端（登录/沟通报告/配置/设置）
 ├── deploy/                ← 部署（Windows start.bat / Docker compose）
 └── tools/                 ← 工具脚本
