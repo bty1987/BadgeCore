@@ -785,6 +785,52 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true });
   }
 
+  // 数据看板（对标 ops_dashboard，D17；manager 及以上）
+  if (pathname === '/api/dashboard' && method === 'GET') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者可看看板');
+    const days = Math.min(365, Math.max(1, Number(Object.fromEntries(url.searchParams).days) || 30));
+    const since = new Date(Date.now() - days * 86400_000).toISOString();
+    return sendJson(res, 200, { days, ...dashboardStats(since, null) });
+  }
+  if (pathname === '/api/dashboard/export' && method === 'GET') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者');
+    const days = Math.min(365, Math.max(1, Number(Object.fromEntries(url.searchParams).days) || 30));
+    const stats = dashboardStats(new Date(Date.now() - days * 86400_000).toISOString(), null);
+    const text = [
+      'BadgeCore 数据看板导出',
+      `【水印】导出人: ${me.name}（${me.role}）  时间: ${new Date().toLocaleString('zh-CN')}  本次导出已记入审计日志`,
+      '='.repeat(50),
+      `近 ${days} 天概览: ${JSON.stringify(stats.overview, null, 2)}`,
+      `每日明细: ${stats.by_day.map(d => `${d.date} ${d.count}次/${Math.round(d.duration / 60)}分钟`).join('\n  ')}`,
+      `任务达成榜: ${stats.rank_tasks.map((u, i) => `${i + 1}. ${u.owner} ${u.task_rate}%`).join('、') || '无'}`,
+      `能力榜: ${stats.rank_ability.map((u, i) => `${i + 1}. ${u.owner} ${u.intention}`).join('、') || '无'}`,
+    ].join('\n');
+    audit(db, me.name, 'export', 'dashboard', `days=${days} 水印导出`);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'attachment; filename="badgecore-dashboard.txt"' });
+    return res.end(text);
+  }
+
+  // 团队报告（对标 team_report 周报/月报，D17）
+  if (pathname === '/api/report/generate' && method === 'POST') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者');
+    const b = await readBody(req);
+    const report = await generateTeamReport(['weekly', 'monthly'].includes(b.period) ? b.period : 'weekly', b.ref, me.role, me.name);
+    return sendJson(res, 200, report);
+  }
+  if (pathname === '/api/report/list' && method === 'GET') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者');
+    const rows = db.prepare('SELECT id, period, start_at, end_at, content, created_at FROM team_reports ORDER BY id DESC LIMIT 50').all()
+      .map(r => { const c = JSON.parse(r.content); return { ...r, content: undefined, label: c.label, summary: c.summary, ai_generated: !!c.ai_generated }; });
+    return sendJson(res, 200, rows);
+  }
+  if ((m = pathname.match(/^\/api\/report\/(\d+)$/)) && method === 'GET') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者');
+    const row = db.prepare('SELECT * FROM team_reports WHERE id=?').get(Number(m[1]));
+    if (!row) throw new HttpError(404, '报告不存在');
+    row.content = JSON.parse(row.content);
+    return sendJson(res, 200, row);
+  }
+
   // 审计（admin，ADM-315）
   if (pathname === '/api/audit' && method === 'GET') {
     if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
@@ -876,6 +922,111 @@ function serveStatic(req, res, pathname) {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
     res.end(buf);
   });
+}
+
+// ---------- 看板统计（对标 ops_dashboard/team_report，D17） ----------
+/** 聚合一段时间内的沟通数据（含报告解析） */
+function dashboardStats(sinceIso, owners) {
+  const ownerFilter = owners ? `AND owner IN (${owners.map(() => '?').join(',')})` : '';
+  const rows = db.prepare(`SELECT id, created_at, duration_s, owner, topic, status, report, meta FROM communications WHERE created_at >= ? ${ownerFilter}`)
+    .all(sinceIso, ...(owners || []));
+  const byOwner = new Map();
+  const byDay = new Map();
+  let totalDur = 0, violComms = 0, intentionSum = 0, intentionN = 0;
+  for (const r of rows) {
+    const day = String(r.created_at).slice(0, 10);
+    const d = byDay.get(day) || { date: day, count: 0, duration: 0 };
+    d.count++; d.duration += r.duration_s || 0; byDay.set(day, d);
+    totalDur += r.duration_s || 0;
+    const rp = r.report ? JSON.parse(r.report) : null;
+    const meta = r.meta ? JSON.parse(r.meta) : {};
+    const o = byOwner.get(r.owner || '（未指定）') || { owner: r.owner || '（未指定）', count: 0, duration: 0, taskDone: 0, taskTotal: 0, intentionSum: 0, intentionN: 0, violations: 0 };
+    o.count++; o.duration += r.duration_s || 0;
+    if (rp?.tasks?.length) { o.taskTotal += rp.tasks.length; o.taskDone += rp.tasks.filter(t => t.status === '完成').length; }
+    if (rp?.intention?.score != null) { o.intentionSum += rp.intention.score; o.intentionN++; intentionSum += rp.intention.score; intentionN++; }
+    if ((meta.alerts || []).length || rp?.violations?.length) { violComms++; o.violations++; }
+    byOwner.set(o.owner, o);
+  }
+  const users = [...byOwner.values()].map(o => ({
+    ...o,
+    intention: o.intentionN ? Math.round(o.intentionSum / o.intentionN) : null,
+    task_rate: o.taskTotal ? Math.round(o.taskDone / o.taskTotal * 100) : null,
+  }));
+  return {
+    overview: {
+      comm_count: rows.length,
+      total_duration: Math.round(totalDur),
+      user_count: byOwner.size,
+      violation_rate: rows.length ? Math.round(violComms / rows.length * 100) : 0,
+      avg_intention: intentionN ? Math.round(intentionSum / intentionN) : null,
+    },
+    by_day: [...byDay.values()].sort((a, b) => a.date < b.date ? -1 : 1),
+    rank_tasks: [...users].filter(u => u.task_rate !== null).sort((a, b) => b.task_rate - a.task_rate),
+    rank_ability: [...users].filter(u => u.intention !== null).sort((a, b) => b.intention - a.intention),
+    violation_dist: users.filter(u => u.violations > 0).map(u => ({
+      owner: u.owner, violations: u.violations, rate: u.count ? Math.round(u.violations / u.count * 100) : 0, count: u.count,
+    })),
+    recent: rows.slice(-10).reverse().map(r => ({
+      id: r.id, created_at: r.created_at, owner: r.owner, topic: r.topic, status: r.status,
+      alerts: (JSON.parse(r.meta || '{}').alerts || []).length,
+    })),
+  };
+}
+
+/** 团队报告（mock/LLM 生成总结） */
+async function generateTeamReport(period, refDate, role, name) {
+  const ref = refDate ? new Date(refDate) : new Date();
+  let start, end, label;
+  if (period === 'monthly') {
+    start = new Date(ref.getFullYear(), ref.getMonth(), 1);
+    end = new Date(ref.getFullYear(), ref.getMonth() + 1, 1);
+    label = `${ref.getFullYear()} 年 ${ref.getMonth() + 1} 月月报`;
+  } else {
+    const dow = (ref.getDay() + 6) % 7; // 周一为一周开始
+    start = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - dow);
+    end = new Date(start.getTime() + 7 * 86400_000);
+    label = `${start.toISOString().slice(0, 10)} 周报`;
+  }
+  const stats = dashboardStats(start.toISOString(), null);
+  const llm = getSetting(db, 'llm');
+  let ai;
+  if (!llm || llm.provider === 'mock') {
+    const top = stats.rank_ability[0], violTop = stats.violation_dist[0];
+    ai = {
+      summary: `【Mock】本${period === 'monthly' ? '月' : '周'}共沟通 ${stats.overview.comm_count} 次、合计 ${Math.round(stats.overview.total_duration / 60)} 分钟、${stats.overview.user_count} 人参与；平均意向度 ${stats.overview.avg_intention ?? '-'}，沟通违规率 ${stats.overview.violation_rate}%。`,
+      highlights: [
+        top ? `能力榜首：${top.owner}（平均意向度 ${top.intention}）` : '暂无足够数据',
+        stats.rank_tasks[0] ? `任务达成最高：${stats.rank_tasks[0].owner}（${stats.rank_tasks[0].task_rate}%）` : '暂无任务数据',
+      ],
+      risks: [
+        violTop ? `违规集中：${violTop.owner}（${violTop.violations} 次，命中率 ${violTop.rate}%）` : '未检出违规',
+        stats.overview.comm_count === 0 ? '本周无沟通记录，需推动外勤拜访' : null,
+      ].filter(Boolean),
+      ai_generated: true,
+    };
+  } else {
+    const raw = await fetch(llm.base_url.replace(/\/$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${llm.api_key}` },
+      body: JSON.stringify({
+        model: llm.model,
+        messages: [
+          { role: 'system', content: '你是销售团队管理报告助手。依据统计数据输出严格 JSON：{summary:string, highlights:string[], risks:string[]}，结论只来自数据，中文。' },
+          { role: 'user', content: `【${label} 统计】\n${JSON.stringify(stats.overview)}\n能力榜:${JSON.stringify(stats.rank_ability.slice(0, 5))}\n任务榜:${JSON.stringify(stats.rank_tasks.slice(0, 5))}\n违规分布:${JSON.stringify(stats.violation_dist)}` },
+        ],
+        temperature: 0.3,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!raw.ok) throw new HttpError(502, `LLM HTTP ${raw.status}`);
+    const d = await raw.json();
+    ai = JSON.parse(String(d.choices?.[0]?.message?.content || '{}').replace(/```(?:json)?|```/g, '').trim());
+    ai.ai_generated = true;
+  }
+  const r = db.prepare('INSERT INTO team_reports(period, start_at, end_at, content, created_at, created_by) VALUES(?,?,?,?,?,?)')
+    .run(period, start.toISOString(), end.toISOString(), JSON.stringify({ label, stats, ...ai }), new Date().toISOString(), name);
+  audit(db, name, 'report_generate', `#${r.lastInsertRowid}`, label);
+  return { id: Number(r.lastInsertRowid), label, stats, ...ai };
 }
 
 // ---------- 服务器 ----------

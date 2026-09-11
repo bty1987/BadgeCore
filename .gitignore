@@ -33,3 +33,4 @@ hardware/receiver/asr.config.json
 
 # 后台数据库与运行数据
 server/data/
+research/code/

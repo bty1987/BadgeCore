@@ -273,13 +273,33 @@ async function waitReady(child) {
     r = await api('POST', '/api/config/insight_categories', { name: '品牌信任', data: { desc: '冒烟' } });
     check('洞察配置域可用', r.status === 200);
 
+    // 10.7 D17 看板与团队报告
+    r = await api('GET', '/api/dashboard?days=30');
+    check('看板概览聚合（次数≥2）', r.data?.overview?.comm_count >= 2 && r.data?.overview?.user_count >= 1);
+    check('看板含每日趋势/最近会话', Array.isArray(r.data?.by_day) && r.data.by_day.length >= 1 && Array.isArray(r.data?.recent));
+    const dashExp = await fetch(BASE + '/api/dashboard/export?days=30', { headers: { Cookie: cookie } });
+    const dashTxt = await dashExp.text();
+    check('看板导出水印（CMP-13）', dashExp.status === 200 && dashTxt.includes('导出人: admin'));
+    r = await api('POST', '/api/report/generate', { period: 'weekly' });
+    check('团队周报生成（Mock AI）', r.status === 200 && r.data?.summary?.includes('Mock') && Array.isArray(r.data?.highlights));
+    r = await api('GET', '/api/report/list');
+    check('报告列表可查', (r.data || []).length >= 1 && r.data[0].ai_generated);
+    r = await api('GET', `/api/report/${r.data[0].id}`);
+    check('报告详情含统计+AI 结论', !!r.data?.content?.stats?.overview && Array.isArray(r.data?.content?.risks));
+    // sales 无权看看板
+    const adminCookie2 = cookie;
+    await api('POST', '/api/login', { name: 'sales01', password: 's123456' }, false);
+    r = await api('GET', '/api/dashboard');
+    check('看板权限：sales 403', r.status === 403);
+    cookie = adminCookie2;
+
     // 11. 审计
     r = await api('GET', '/api/audit');
     check('审计日志有记录', (r.data || []).some(a => a.action === 'login' && a.user === 'admin'));
     check('风险告警入审计（AI-09）', (r.data || []).some(a => a.action === 'risk_alert'));
 
     // 12. 静态页
-    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/ask.html', '/attendance.html', '/customers.html', '/devices.html', '/notifications.html', '/style.css']) {
+    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/ask.html', '/attendance.html', '/customers.html', '/devices.html', '/notifications.html', '/dashboard.html', '/style.css']) {
       const res = await fetch(BASE + p);
       check(`静态页 ${p}`, res.status === 200);
     }

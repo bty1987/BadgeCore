@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS attendance_records(  -- 05 册 ALL-201/202，与沟�
   source TEXT NOT NULL DEFAULT 'beacon',       -- beacon | manual
   note TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS team_reports(         -- 团队报告（对标 team_report 周报/月报/季报/年报）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  period TEXT NOT NULL,                          -- weekly | monthly
+  start_at TEXT NOT NULL,
+  end_at TEXT NOT NULL,
+  content TEXT NOT NULL,                         -- JSON（统计+AI 总结）
+  created_at TEXT NOT NULL,
+  created_by TEXT DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS notifications(        -- 站内信（AI-11 定时报告推送的投递箱）
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user TEXT NOT NULL,
