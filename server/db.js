@@ -37,6 +37,15 @@ CREATE TABLE IF NOT EXISTS config_items(
   data TEXT DEFAULT '{}',                     -- JSON（各域自定义结构）
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS attendance_records(  -- 05 册 ALL-201/202，与沟通数据分域（CMP-09）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user TEXT NOT NULL,
+  date TEXT NOT NULL,                          -- YYYY-MM-DD
+  first_in TEXT, last_out TEXT,                -- ISO 时间
+  status TEXT NOT NULL DEFAULT 'auto',         -- auto | manual | abnormal
+  source TEXT NOT NULL DEFAULT 'beacon',       -- beacon | manual
+  note TEXT DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT,

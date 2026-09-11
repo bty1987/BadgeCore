@@ -25,13 +25,15 @@ const path = require('path');
 const crypto = require('crypto');
 const { openDb, getSetting, setSetting, audit } = require('./db');
 const { analyzeCommunication } = require('./analysis');
+const { judgeAttendance, periodsToDaily } = require('./attendance');
 
 const PORT = Number(process.env.PORT || 8200);
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'badgecore.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const CONFIG_DOMAINS = [ // 04 册沟通配置九大域（ADM-01x）
+const CONFIG_DOMAINS = [ // 04 册沟通配置九大域（ADM-01x）+ 知识库/案例库/风险规则（04 册 §2 菜单）
   'info_fields', 'deal_models', 'task_models', 'ability_models',
   'summary_templates', 'analysis_dims', 'flows', 'violations', 'competitors',
+  'knowledge_base', 'case_library', 'risk_rules',
 ];
 const SESSION_TTL = 12 * 3600 * 1000;
 
@@ -112,6 +114,45 @@ function readBody(req, limit = 20 * 1024 * 1024) { // 转写文本可能较大
 }
 
 // ---------- 业务逻辑 ----------
+/** 实时辅助·规则预筛（AI-09 一期）：竞品提及 + 风险词命中，入库时计算并随 meta 下发 */
+function computeAlerts(transcript) {
+  const alerts = [];
+  for (const c of db.prepare('SELECT name FROM config_items WHERE domain=? AND enabled=1').all('competitors')) {
+    if (transcript.includes(c.name)) alerts.push({ type: 'competitor', word: c.name, level: 'mid' });
+  }
+  for (const r of db.prepare('SELECT name, data FROM config_items WHERE domain=? AND enabled=1').all('risk_rules')) {
+    const d = JSON.parse(r.data || '{}');
+    for (const kw of d.keywords || []) {
+      if (transcript.includes(kw)) alerts.push({ type: 'risk', word: kw, rule: r.name, level: d.level || 'high' });
+    }
+  }
+  return alerts;
+}
+
+/** Ask AI 检索（AI-08 简版 RAG，内部使用：滑窗关键词匹配，不依赖向量库） */
+function extractTerms(q) {
+  const stop = new Set(['什么', '怎么', '哪些', '请问', '一下', '关于', '最近', '情况', '我们', '他们', '这个', '那个', '如何', '为什么', '多少']);
+  const terms = new Set();
+  const clean = q.replace(/[？?！!。，,\s]/g, '');
+  for (let len = 2; len <= 4; len++) {
+    for (let i = 0; i + len <= clean.length; i++) {
+      const s = clean.slice(i, i + len);
+      if (!stop.has(s)) terms.add(s);
+    }
+  }
+  return [...terms].slice(0, 40);
+}
+function searchCommunications(question, scopeSql, scopeParams) {
+  const terms = extractTerms(question);
+  const rows = db.prepare(`SELECT id, created_at, topic, transcript, report FROM communications ${scopeSql} ORDER BY id DESC LIMIT 300`).all(...scopeParams);
+  return rows.map(r => {
+    const hay = `${r.topic}\n${r.transcript || ''}\n${r.report || ''}`;
+    let score = 0;
+    for (const t of terms) if (hay.includes(t)) score++;
+    return { ...r, score };
+  }).filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
+}
+
 function loadAnalysisConfig() {
   const cfg = {};
   for (const domain of ['deal_models', 'task_models', 'competitors', 'violations', 'analysis_dims']) {
@@ -181,6 +222,13 @@ async function handleApi(req, res, url) {
       );
     const id = Number(info.lastInsertRowid);
     audit(db, 'receiver', 'ingest', `comm#${id}`, `${Number(b.duration_s) || 0}s`);
+    // 实时辅助·规则预筛（AI-09）：竞品/风险词命中随记录下发并告警
+    const alerts = computeAlerts(String(b.transcript || ''));
+    if (alerts.length) {
+      db.prepare('UPDATE communications SET meta=? WHERE id=?')
+        .run(JSON.stringify({ device: b.device || '', source: b.source || 'receiver', alerts }), id);
+      for (const a of alerts) audit(db, 'rule_engine', 'risk_alert', `comm#${id}`, `${a.type}:${a.word}`);
+    }
     const llm = getSetting(db, 'llm');
     if (llm.auto && b.transcript) {
       try { await runAnalysis(id, 'auto'); return sendJson(res, 200, { id, analyzed: true }); }
@@ -342,6 +390,79 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/audit' && method === 'GET') {
     if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
     return sendJson(res, 200, db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 300').all());
+  }
+
+  // Ask AI（AI-08 简版 RAG：检索范围随数据权限，来源强制引用）
+  if (pathname === '/api/ask' && method === 'POST') {
+    const { question } = await readBody(req);
+    if (!question || String(question).length < 2) throw new HttpError(400, '问题太短');
+    const scopeSql = me.role === 'sales' ? 'WHERE owner=?' : '';
+    const scopeParams = me.role === 'sales' ? [me.name] : [];
+    const comms = searchCommunications(String(question), scopeSql, scopeParams);
+    const kbs = db.prepare("SELECT name, data FROM config_items WHERE domain='knowledge_base' AND enabled=1 ORDER BY sort,id").all()
+      .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
+    const cases = db.prepare("SELECT name, data FROM config_items WHERE domain='case_library' AND enabled=1 ORDER BY sort,id").all()
+      .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
+    const sources = [
+      ...comms.map((c, i) => ({ n: i + 1, type: 'comm', id: c.id, title: `沟通#${c.id} ${c.topic || ''}`, snippet: (c.transcript || '').slice(0, 120) })),
+      ...kbs.map((k, i) => ({ n: comms.length + i + 1, type: 'kb', id: 0, title: `知识库·${k.name}`, snippet: String(k.content || k.desc || '').slice(0, 120) })),
+      ...cases.map((c, i) => ({ n: comms.length + kbs.length + i + 1, type: 'case', id: 0, title: `案例·${c.name}`, snippet: String(c.script || c.content || '').slice(0, 120) })),
+    ];
+    const llm = getSetting(db, 'llm');
+    let answer;
+    if (!llm || llm.provider === 'mock') {
+      answer = `【Mock】在${me.role === 'sales' ? '你名下' : '全企业'}数据范围内检索到 ${comms.length} 条相关沟通、知识库 ${kbs.length} 条、案例 ${cases.length} 条。` +
+        (sources.length ? `最相关：${sources[0].title}（${sources[0].snippet}…）。配置真实 LLM 后可获得基于以上来源的综合回答。` : '未检索到相关内容，可尝试更换关键词。');
+    } else {
+      const context = sources.map(s => `[${s.n}] ${s.title}\n${s.snippet}`).join('\n\n');
+      const messages = [
+        { role: 'system', content: '你是企业沟通数据问答助手（SalesCoach 视角）。只依据下方【检索来源】回答；每个事实结论标注来源编号如 [1]；来源不足以回答时明确说明，禁止编造；不透露来源之外的其他员工数据。回答用中文，简洁分点。' },
+        { role: 'user', content: `【检索来源】\n${context}\n\n【问题】${question}` },
+      ];
+      const raw = await fetch(llm.base_url.replace(/\/$/, '') + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${llm.api_key}` },
+        body: JSON.stringify({ model: llm.model, messages, temperature: 0.2 }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!raw.ok) throw new HttpError(502, `LLM HTTP ${raw.status}`);
+      const d = await raw.json();
+      answer = d.choices?.[0]?.message?.content || '(空回答)';
+    }
+    audit(db, me.name, 'ask', '', String(question).slice(0, 80));
+    return sendJson(res, 200, { answer, sources, ai_generated: true });
+  }
+
+  // 考勤（05 册 ALL-201/202；CMP-09 与沟通数据分域，HR 角色仅经此接口触达考勤）
+  if (pathname === '/api/attendance' && method === 'POST') { // 手动补卡（ALL-202）
+    const b = await readBody(req);
+    if (!b.user || !b.date) throw new HttpError(400, '需要 user/date');
+    db.prepare('INSERT INTO attendance_records(user, date, status, source, note) VALUES(?,?,?,?,?)')
+      .run(String(b.user), String(b.date), 'manual', 'manual', String(b.note || ''));
+    audit(db, me.name, 'attendance_manual', `${b.user}@${b.date}`, b.note);
+    return sendJson(res, 200, { ok: true });
+  }
+  if (pathname === '/api/attendance' && method === 'GET') {
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者可查考勤（CMP-09 分域）');
+    const rows = db.prepare('SELECT * FROM attendance_records ORDER BY date DESC, user LIMIT 500').all();
+    return sendJson(res, 200, rows);
+  }
+  if (pathname === '/api/attendance/judge' && method === 'POST') { // 信标事件判定（网关上报/模拟）
+    if (me.role === 'sales') throw new HttpError(403, '仅管理者可调用');
+    const b = await readBody(req);
+    const { periods, params } = judgeAttendance(b.events || [], b.params || {});
+    let saved = [];
+    if (b.save && b.user) {
+      for (const d of periodsToDaily(periods)) {
+        const r = db.prepare('INSERT INTO attendance_records(user, date, first_in, last_out, status, source) VALUES(?,?,?,?,?,?)')
+          .run(String(b.user), d.date,
+            d.firstIn ? new Date(d.firstIn).toISOString() : null,
+            d.lastOut ? new Date(d.lastOut).toISOString() : null, 'auto', 'beacon');
+        saved.push(Number(r.lastInsertRowid));
+      }
+      audit(db, me.name, 'attendance_judge', String(b.user), `${periods.length} 段`);
+    }
+    return sendJson(res, 200, { periods, daily: periodsToDaily(periods), saved, params });
   }
 
   throw new HttpError(404, 'API 不存在');

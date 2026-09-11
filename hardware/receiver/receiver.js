@@ -26,6 +26,9 @@ fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 // 讯飞听写凭据（缺省则仅录制不转写；配置方法见 asr.config.example.json）
 const XF_CONFIG = loadXfConfig(true);
 
+// 实时辅助关键词（AI-09 一期规则层）：环境变量 XF_ALERT_KEYWORDS，逗号分隔，与后台竞品库/风险规则保持一致
+const ALERT_WORDS = (process.env.XF_ALERT_KEYWORDS || '').split(',').map(s => s.trim()).filter(Boolean);
+
 const stats = { sessions: 0, totalFrames: 0, totalBytes: 0, activeWs: 0 };
 
 // ---------- HTTP：OTA 接口 ----------
@@ -67,6 +70,7 @@ wss.on('connection', (ws, req) => {
   let frameMs = 60;
   let transcriber = null; // 实时转写器（首帧音频时懒创建）
   let oggPath = null; // 落盘后的录音文件路径（入库用）
+  const firedAlerts = new Set(); // 实时辅助已触发关键词（每连接去重）
 
   console.log(`\n[WS ] 设备接入 #${stats.sessions} from ${req.socket.remoteAddress} → 会话 ${sessionId}`);
 
@@ -106,7 +110,16 @@ wss.on('connection', (ws, req) => {
     if (XF_CONFIG) {
       if (!transcriber) {
         transcriber = createLiveTranscriber(XF_CONFIG, {
-          onText: text => console.log(`[ASR] 会话${sessionId} ${text}`),
+          onText: text => {
+            console.log(`[ASR] 会话${sessionId} ${text}`);
+            // 实时辅助·关键词告警（AI-09 一期规则层；词表来自环境变量，与后台「风险预警/竞品库」保持一致）
+            for (const w of ALERT_WORDS) {
+              if (!firedAlerts.has(w) && text.includes(w)) {
+                firedAlerts.add(w);
+                console.log(`[ALERT] 会话${sessionId} 检测到关键词「${w}」（实时辅助规则触发）`);
+              }
+            }
+          },
           onNotice: msg => console.log(`[ASR] 会话${sessionId} ${msg}`),
         });
       }

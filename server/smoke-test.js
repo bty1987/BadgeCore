@@ -66,6 +66,8 @@ async function waitReady(child) {
     // 3. 先配竞品词典（ADM-019：竞品库是识别词典，识别只认已配置竞品）
     r = await api('POST', '/api/config/competitors', { name: '竞品A', data: { notes: '冒烟' } });
     check('新增竞品词典条目', r.status === 200);
+    r = await api('POST', '/api/config/knowledge_base', { name: '异议处理·价格贵', data: { content: '强调五年质保与上门服务' } });
+    check('新增知识库条目', r.status === 200);
 
     // 4. receiver 入库 + 自动 Mock 分析（默认 llm=mock auto=true）
     const ingest = await fetch(BASE + '/api/ingest', {
@@ -86,6 +88,7 @@ async function waitReady(child) {
     r = await api('GET', `/api/communications/${ingestData.id}`);
     const rp = r.data?.report;
     check('详情含转写全文', (r.data?.transcript || '').includes('竞品A'));
+    check('实时辅助告警：竞品提及入库（AI-09）', (r.data?.meta?.alerts || []).some(a => a.type === 'competitor' && a.word === '竞品A'));
     check('报告骨架完整', !!rp && ['summary', 'stance', 'competitors', 'intention', 'tasks', 'violations', 'todos', 'meta'].every(k => k in rp));
     check('竞品计数=1', rp?.competitors?.[0]?.name === '竞品A' && rp.competitors[0].mentions === 1);
     check('待办提取到位', rp?.todos?.length >= 1);
@@ -126,12 +129,36 @@ async function waitReady(child) {
     check('配置页权限：sales 403', r.status === 403);
     cookie = savedCookie;
 
-    // 9. 审计
+    // 9. Ask AI（AI-08 简版 RAG）
+    r = await api('POST', '/api/ask', { question: '竞品A 有哪些顾虑？' });
+    check('Ask AI mock 回答', r.status === 200 && r.data?.answer?.includes('Mock'));
+    check('Ask AI 带来源（可溯源）', (r.data?.sources || []).length >= 2 && r.data.sources.some(s => s.type === 'kb'));
+    const salesAsk = await api('POST', '/api/ask', { question: '所有员工的沟通数据' });
+    check('Ask AI 权限内执行（sales 上下文无越权数据接口）', salesAsk.status === 200);
+
+    // 10. 考勤（ALL-201/202）
+    const t0 = 1789136400000;
+    r = await api('POST', '/api/attendance/judge', {
+      events: [
+        { t: t0, beacon: 'B1', rssi: -60 }, { t: t0 + 30_000, beacon: 'B2', rssi: -62 },
+        { t: t0 + 90_000, beacon: 'B1', rssi: -55 },
+      ],
+      save: true, user: 'admin',
+    });
+    check('信标判定出 1 个在场段', r.data?.periods?.length === 1 && r.data.daily?.length === 1);
+    check('考勤日汇总入库', (r.data?.saved || []).length === 1);
+    r = await api('POST', '/api/attendance', { user: 'admin', date: '2026-09-10', note: '冒烟补卡' });
+    check('手动补卡提交', r.status === 200);
+    r = await api('GET', '/api/attendance');
+    check('考勤记录列表（含补卡）', (r.data || []).length >= 2 && r.data.some(x => x.status === 'manual'));
+
+    // 11. 审计
     r = await api('GET', '/api/audit');
     check('审计日志有记录', (r.data || []).some(a => a.action === 'login' && a.user === 'admin'));
+    check('风险告警入审计（AI-09）', (r.data || []).some(a => a.action === 'risk_alert'));
 
-    // 10. 静态页
-    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/style.css']) {
+    // 12. 静态页
+    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/ask.html', '/attendance.html', '/style.css']) {
       const res = await fetch(BASE + p);
       check(`静态页 ${p}`, res.status === 200);
     }

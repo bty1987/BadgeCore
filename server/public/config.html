@@ -11,6 +11,8 @@
   <span class="brand">BadgeCore</span>
   <nav>
     <a href="/">沟通记录</a>
+    <a href="/ask.html">Ask AI</a>
+    <a href="/attendance.html">考勤</a>
     <a href="/config.html" class="active">沟通配置</a>
     <a href="/settings.html">设置</a>
   </nav>
@@ -19,7 +21,7 @@
 </div>
 <div class="wrap">
   <div class="card">
-    <h2>沟通配置九大域（04 册 ADM-01x）</h2>
+    <h2>沟通配置域（04 册九大域 + 知识库/案例库/风险预警）</h2>
     <div class="tabs" id="tabs"></div>
     <div class="muted" id="domain-help" style="margin-bottom:10px"></div>
     <table id="tbl">
@@ -49,7 +51,10 @@ const DOMAINS = {
   analysis_dims:    { label: '分析维度',   help: 'data: {key:"summary|stance|competitors|intention|tasks|violations"} 控制报告启用维度' },
   flows:            { label: '沟通流程',   help: 'data: {steps:["环节1","环节2", …]}' },
   violations:       { label: '违规检测',   help: 'data: {trigger:"触发描述", typical:"典型话术示例（必填）", exemption:"非违规判定说明（必填，语义判活关键）"}' },
-  competitors:      { label: '竞争对手',   help: 'data: {products:["产品线"], notes:"优劣势素材"}，name 即竞品名（识别词典）' },
+  competitors:      { label: '竞争对手',   help: 'data: {products:["产品线"], notes:"优劣势素材"}，name 即竞品名（识别词典，入库自动告警提及）' },
+  knowledge_base:   { label: '知识库',     help: 'data: {content:"知识内容（FAQ/异议处理/商务政策…）"} → Ask AI 检索来源' },
+  case_library:     { label: '案例库',     help: 'data: {scenario:"适用场景", script:"金牌话术"} → Ask AI 检索来源' },
+  risk_rules:       { label: '风险预警',   help: 'data: {keywords:["风险词","回扣"], level:"high|mid"} → 新沟通命中关键词即自动告警（AI-09 规则层）' },
 };
 let domain = 'deal_models', ME = null;
 

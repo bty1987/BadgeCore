@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>考勤 · BadgeCore</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">BadgeCore</span>
+  <nav>
+    <a href="/">沟通记录</a>
+    <a href="/ask.html">Ask AI</a>
+    <a href="/attendance.html" class="active">考勤</a>
+    <a href="/config.html">沟通配置</a>
+    <a href="/settings.html">设置</a>
+  </nav>
+  <span class="spacer"></span><span class="who" id="who"></span>
+  <button onclick="location='/login.html'">退出</button>
+</div>
+<div class="wrap">
+  <div class="card">
+    <h2>考勤记录（ALL-203；与沟通数据分域存储 CMP-09）</h2>
+    <table><thead><tr><th>日期</th><th>员工</th><th>首次到达</th><th>最后离开</th><th>状态</th><th>来源</th><th>备注</th></tr></thead><tbody id="tbody"></tbody></table>
+    <details style="margin-top:10px"><summary>＋ 手动补卡（ALL-202）</summary>
+      <div class="grid2" style="margin-top:8px">
+        <div><label>员工账号</label><input id="m-user"></div>
+        <div><label>日期（YYYY-MM-DD）</label><input id="m-date" placeholder="2026-09-11"></div>
+      </div>
+      <label>备注</label><input id="m-note" placeholder="外出见客户">
+      <div style="margin-top:8px"><button class="primary" onclick="manual()">提交补卡</button></div>
+    </details>
+  </div>
+  <div class="card">
+    <h2>信标事件判定（ALL-201：≥2 信标 RSSI≥-75dBm 持续 60s 判到达；5 分钟无有效信号判离开）</h2>
+    <div class="muted">现阶段无蓝牙网关实物：粘贴模拟事件 JSON 测试判定算法。事件格式：[{"t": 毫秒时间戳, "beacon": "B1", "rssi": -60}]</div>
+    <textarea id="events" style="min-height:140px; margin-top:8px">[
+  {"t": 1789136400000, "beacon": "B1", "rssi": -60},
+  {"t": 1789136430000, "beacon": "B2", "rssi": -62},
+  {"t": 1789137600000, "beacon": "B1", "rssi": -55}
+]</textarea>
+    <div style="display:flex;gap:8px;align-items:end;margin-top:8px">
+      <div style="flex:1"><label>保存为员工考勤（可选）</label><input id="save-user" placeholder="员工账号，留空仅判定不入库"></div>
+      <button class="primary" onclick="judge()">判定</button>
+    </div>
+    <div id="judge-out" class="muted" style="margin-top:10px"></div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { location.href = '/login.html'; throw 0; }
+  return res;
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = iso => iso ? iso.replace('T', ' ').slice(0, 16) : '-';
+async function init() {
+  const me = await (await api('/api/me')).json();
+  $('who').textContent = `${me.name}（${me.role}）`;
+  if (me.role === 'sales') { $('tbody').innerHTML = '<tr><td colspan="7" class="muted">仅管理者可查看考勤。</td></tr>'; return; }
+  load();
+}
+async function load() {
+  const rows = await (await api('/api/attendance')).json();
+  $('tbody').innerHTML = rows.map(r => `
+    <tr><td>${esc(r.date)}</td><td>${esc(r.user)}</td><td>${fmt(r.first_in)}</td><td>${fmt(r.last_out)}</td>
+    <td><span class="badge ${r.status === 'manual' ? 'mid' : 'analyzed'}">${{auto:'自动',manual:'补卡',abnormal:'异常'}[r.status] || r.status}</span></td>
+    <td>${r.source === 'manual' ? '手动' : '信标'}</td><td>${esc(r.note)}</td></tr>`).join('')
+    || '<tr><td colspan="7" class="muted">暂无考勤记录。</td></tr>';
+}
+async function manual() {
+  const res = await api('/api/attendance', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: $('m-user').value, date: $('m-date').value, note: $('m-note').value }) });
+  const d = await res.json();
+  if (!res.ok) { alert(d.error); return; }
+  $('m-note').value = ''; load();
+}
+async function judge() {
+  let events; try { events = JSON.parse($('events').value); } catch { alert('JSON 格式有误'); return; }
+  const body = { events, save: !!$('save-user').value, user: $('save-user').value };
+  const res = await api('/api/attendance/judge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await res.json();
+  if (!res.ok) { $('judge-out').innerHTML = `<span class="err">${esc(d.error)}</span>`; return; }
+  $('judge-out').innerHTML = `判定出 <b>${d.periods.length}</b> 个在场段：` +
+    d.periods.map(p => `${fmt(new Date(p.inAt).toISOString())} → ${p.outAt ? fmt(new Date(p.outAt).toISOString()) : '仍在厂'}`).join('；') +
+    (d.saved.length ? `（已入库 ${d.saved.length} 条日汇总）` : '');
+  if (d.saved.length) load();
+}
+init();
+</script>
+</body>
+</html>
