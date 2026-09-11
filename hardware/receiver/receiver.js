@@ -16,10 +16,15 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { buildOggOpus } = require('./ogg-writer');
+const { loadConfig: loadXfConfig } = require('./xfyun-iat');
+const { createLiveTranscriber } = require('./asr-live');
 
 const PORT = 8100; // 8000 被本机 aTrust VPN 组件占用，避开
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+
+// 讯飞听写凭据（缺省则仅录制不转写；配置方法见 asr.config.example.json）
+const XF_CONFIG = loadXfConfig(true);
 
 const stats = { sessions: 0, totalFrames: 0, totalBytes: 0, activeWs: 0 };
 
@@ -60,6 +65,7 @@ wss.on('connection', (ws, req) => {
   let byteCount = 0;
   let frameList = []; // 缓存原始 Opus packet，会话结束封装 Ogg
   let frameMs = 60;
+  let transcriber = null; // 实时转写器（首帧音频时懒创建）
 
   console.log(`\n[WS ] 设备接入 #${stats.sessions} from ${req.socket.remoteAddress} → 会话 ${sessionId}`);
 
@@ -95,6 +101,16 @@ wss.on('connection', (ws, req) => {
       payload = data.subarray(4, 4 + payloadSize);
     }
     frameList.push(Buffer.from(payload));
+    // 实时转写：OPUS → PCM → 讯飞听写（无凭据时自动跳过）
+    if (XF_CONFIG) {
+      if (!transcriber) {
+        transcriber = createLiveTranscriber(XF_CONFIG, {
+          onText: text => console.log(`[ASR] 会话${sessionId} ${text}`),
+          onNotice: msg => console.log(`[ASR] 会话${sessionId} ${msg}`),
+        });
+      }
+      transcriber.pushOpus(payload);
+    }
     frameCount++;
     byteCount += payload.length;
     stats.totalFrames++;
@@ -113,17 +129,30 @@ wss.on('connection', (ws, req) => {
       saved = `${path.basename(oggPath)} (${(fs.statSync(oggPath).size / 1024).toFixed(1)}KB)`;
     }
     console.log(`\n[WS ] 会话${sessionId} 结束：共 ${frameCount} 帧，${(byteCount / 1024).toFixed(1)}KB OPUS → ${saved}`);
+    if (transcriber) {
+      transcriber.end(text => {
+        if (text) {
+          const txtPath = filePath.replace(/\.ogg$/, '.xf.txt');
+          fs.writeFileSync(txtPath, text, 'utf8');
+          console.log(`[ASR] 会话${sessionId} 转写完成（${text.length} 字）→ ${path.basename(txtPath)}`);
+          console.log(`[ASR] ${text}`);
+        } else {
+          console.log(`[ASR] 会话${sessionId} 无转写内容`);
+        }
+      });
+    }
   });
   ws.on('error', (e) => console.log(`[WS ] 错误: ${e.message}`));
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('==============================================');
-  console.log('  BadgeCore 第一公里接收服务端 v0.2');
+  console.log('  BadgeCore 接收服务端 v0.3（录制 + 实时转写）');
   console.log(`  监听 0.0.0.0:${PORT}`);
   console.log(`  OTA 接口:  http://<本机IP>:${PORT}/xiaozhi/ota/`);
   console.log(`  音频通道:  ws://<本机IP>:${PORT}/xiaozhi/v1/`);
   console.log(`  录制目录:  ${SESSIONS_DIR}`);
+  console.log(`  实时转写:  ${XF_CONFIG ? '已启用（讯飞流式听写）' : '未启用（缺凭据，仅录制；配置见 asr.config.example.json）'}`);
   console.log('==============================================');
 });
 

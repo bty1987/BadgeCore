@@ -11,8 +11,8 @@
 | 对标拆解 | ✅ 完成 | SaleSmart（x-mate.com）逆向 + 实测，9 册 PRD 输出 |
 | PRD v0.1 | ✅ 完成 | `prd/` 目录；企业内部使用，v0.1 即工作基线（D11，不做正式评审） |
 | 硬件选型 | ✅ 完成 | 开发载体微雪 ESP32-S3-Touch-AMOLED-1.75C 已验收 |
-| 软件管道 | ✅ 打通 | 录音推流 → 自研服务端 → OPUS → 转写（`hardware/receiver/`） |
-| 云 ASR 接入 | ⏳ 进行中 | 讯飞流式听写客户端就位（`receiver/asr-xunfei.js`），待填 Key 实测（D11） |
+| 软件管道 | ✅ 打通 | 录音推流 → 服务端 → OPUS → 转写；receiver v0.3 含实时转写（`hardware/receiver/`） |
+| 云 ASR 接入 | ⏳ 进行中 | 讯飞听写已集成（文件 `asr-xunfei.js` + 实时 `asr-live.js`，模拟设备自测通过），待填 Key 实测（D11/D12） |
 | 产品硬件 | ⏳ 暂缓 | 开发板验证全链路后再启动方案商询价（D11） |
 
 ## 目录导航
@@ -44,7 +44,10 @@ BadgeCore/
 
 ```bash
 # 启动接收服务端（板子配网高级选项 OTA 地址指向本机即可切流）
-cd hardware/receiver && npm i && node receiver.js   # 监听 8100
+cd hardware/receiver && npm i && node receiver.js   # 监听 8100；配了讯飞凭据则边录边出字
+
+# 没有板子也能联调
+node sim-device.js --seconds 5                      # 模拟设备推音频流
 
 # 转写录音
 python transcribe.py sessions/<xxx>.ogg small       # 本地 faster-whisper

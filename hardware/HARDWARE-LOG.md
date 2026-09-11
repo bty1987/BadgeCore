@@ -35,17 +35,20 @@
 3. ✅ **搭接收端**：`receiver/receiver.js`（Node.js，自研，xiaozhi 协议）
 4. ✅ **切流**：板子配网页「高级选项」填 OTA 地址 `http://<本机IP>:8100/xiaozhi/ota/` → 设备自动连自建服务（**无需重编译固件**）
 5. ✅ **转写**：faster-whisper small 本地转写通过（「修复完成」「今天到这里正好…」等样本全对）
-6. 🔄 **接云端 ASR**：讯飞流式听写客户端已就位（`asr-xunfei.js` + `decode-pcm.py`，2026-09-11，D11），待注册讯飞填 Key 实测
-7. ⏳ **BLE 侧**：GATT 协议定义，伴生 App 连调
+6. 🔄 **接云端 ASR**：讯飞流式听写已全链路就位（文件转写 `asr-xunfei.js` + 实时转写 receiver v0.3 集成，2026-09-11，D11/D12），模拟设备自测通过（含 401 容错），待真实 Key 实测
+7. ✂️ **BLE 侧**：一期取消（D12，内部版 WiFi 直连；BLE GATT 转量产期）
 
 ## 四、当前固件与服务
 
 - 固件：xiaozhi v2.4.2（esp32-s3-touch-amoled-1.75c 专用构建）
-- 服务端：`receiver/receiver.js`（Node.js + ws），OTA 接口 + WS 音频通道 + Ogg 落盘，端口 8100
+- 服务端：`receiver/receiver.js` v0.3（Node.js + ws + opusscript），OTA 接口 + WS 音频通道 + Ogg 落盘 + 实时转写（有凭据自动启用，无凭据仅录制），端口 8100
+  - 实时转写链路：OPUS 帧 → opusscript 解码 16k PCM → `asr-live.js`（55s 自动换段/断线重连/连续 3 败停用）→ `xfyun-iat.js`（讯飞听写会话）→ 控制台实时出字 + 会话结束写 `<录音>.xf.txt`
+  - 模块：`xfyun-iat.js`（讯飞 v2 iat 共享客户端：鉴权/分片/wpgs 拼装）、`asr-xunfei.js`（文件转写 CLI）、`asr-live.js`（实时转写器）、`sim-device.js`（模拟设备，无板子联调）
 - 启动：`cd hardware/receiver && npm i && node receiver.js`
+- 联调（无板子）：`node sim-device.js --seconds 5 --pace realtime`（模拟设备连本机 receiver 推正弦音）
 - 转写（本地）：`python transcribe.py sessions/<文件>.ogg small`（faster-whisper，HF_ENDPOINT 镜像 + HF_HUB_DISABLE_XET=1）
-- 转写（云端·讯飞听写）：`node asr-xunfei.js sessions/<文件>.ogg`——自动 PyAV 解码→16k PCM→40ms 分片推流→超 55s 自动分段→写 `<文件>.xf.txt`；凭据放 `asr.config.json`（照 `asr.config.example.json` 填，已 gitignore，严禁入库）
-- 录音产物：`receiver/sessions/*.ogg`（标准 Ogg Opus，可直接播放/转写）
+- 转写（云端·讯飞听写，文件版）：`node asr-xunfei.js sessions/<文件>.ogg`——自动 PyAV 解码→16k PCM→40ms 分片推流→超 55s 自动分段→写 `<文件>.xf.txt`；凭据放 `asr.config.json`（照 `asr.config.example.json` 填，已 gitignore，严禁入库）或环境变量 XF_APPID/XF_API_KEY/XF_API_SECRET
+- 录音产物：`receiver/sessions/*.ogg`（标准 Ogg Opus，可直接播放/转写）+ `*.xf.txt`（实时转写全文）
 
 ## 五、踩坑实录（2026-09-10 首次刷机）
 
@@ -55,6 +58,9 @@
 | 2 | USB 枚举时序 | 下载模式偶发不识别 | 插稳后重做「按住 BOOT→轻点 RST→松 BOOT」；成功标志=`USB JTAG/serial debug unit (VID_303A)` + COM 口 |
 | 3 | **1.75 vs 1.75C 固件差异（核心坑）** | 烧 1.75 版固件后无限重启、屏幕显示"出厂页面"残影 | 串口日志实锤：`TCA9554 IO 扩展器 I2C 初始化失败 → abort 循环`。1.75C 的 TCA9554 地址与 1.75 不同。**解法：烧 `1.75c` 专用固件**（官方 v2.2.4 起提供） |
 | 4 | AMOLED 残影误导 | 固件崩溃循环中屏幕仍显示上电前画面，误以为"出厂固件还在跑" | 串口日志才是真相来源；AMOLED 断驱动前保持最后一帧 |
+| 5 | PyAV 18 (Win) 无法写输出文件 | `av.open('x.ogg','w')` 编码正常但不落盘（读正常） | 编码验证改走 Node opusscript；PyAV 只用于解码（decode-pcm.py） |
+| 6 | PyAV 18 逐帧 resample 累积填充 | 小帧（512 样本）逐帧重采样输出比期望多 8%~20% | 先拼成单个大帧再 resample + 末尾 `resample(None)` flush；planes[0] 有对齐填充必须按 `samples×2` 截断 |
+| 7 | Git Bash `kill $!` 杀不掉 node | 后台起的 node receiver.js 端口 8100 一直被占（EADDRINUSE） | `netstat -ano \| grep :8100` 找 PID → `taskkill //PID <pid> //F` |
 
 **串口日志方法**：PowerShell `System.IO.Ports.SerialPort` 打开 COM 口（115200），DTR/RTS 置真，监听重启输出。
 
