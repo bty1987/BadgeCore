@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置 · BadgeCore</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">BadgeCore</span>
+  <nav>
+    <a href="/">沟通记录</a>
+    <a href="/config.html">沟通配置</a>
+    <a href="/settings.html" class="active">设置</a>
+  </nav>
+  <span class="spacer"></span><span class="who" id="who"></span>
+  <button onclick="location='/login.html'">退出</button>
+</div>
+<div class="wrap">
+  <div class="card" id="card-llm">
+    <h2>AI 分析引擎（06 册 AI-04~06）</h2>
+    <div class="grid2">
+      <div>
+        <label>供应商</label>
+        <select id="llm-provider">
+          <option value="mock">mock（本地模拟，测试用）</option>
+          <option value="openai-compat">OpenAI 兼容（GLM / DeepSeek / Qwen 等）</option>
+        </select>
+        <label>API Base URL（如 https://api.deepseek.com/v1）</label>
+        <input id="llm-url" placeholder="https://api.deepseek.com/v1">
+        <label>模型名（如 deepseek-chat / glm-4 / qwen-plus）</label>
+        <input id="llm-model">
+        <label>API Key（留空 = 不修改已保存的 Key）</label>
+        <input id="llm-key" type="password" placeholder="只写不读">
+      </div>
+      <div>
+        <label style="margin-top:0">新沟通入库后自动分析</label>
+        <select id="llm-auto"><option value="1">是</option><option value="0">否（手动触发）</option></select>
+        <div style="margin-top:16px">
+          <button class="primary" onclick="saveLlm()">保存设置</button>
+          <button onclick="testLlm()">测试分析引擎</button>
+        </div>
+        <div id="llm-msg" class="muted" style="margin-top:10px"></div>
+        <div class="muted">内部使用提示：mock 可先跑通全链路；接入真实供应商后，转写即自动生成报告。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="card-recv">
+    <h2>设备接入（receiver 入库通道）</h2>
+    <div class="muted">receiver 启动时设置环境变量即可自动入库：</div>
+    <pre style="background:#f8f9fb;border-radius:6px;padding:12px;margin-top:8px;font-size:12px" id="recv-cmd"></pre>
+    <div class="muted" style="margin-top:8px">入库令牌：<code id="ingest-token"></code>（仅管理员可见）</div>
+  </div>
+
+  <div class="card" id="card-users">
+    <h2>用户与权限（ADM-30x，MVP：sales=本人 / manager·admin=全部）</h2>
+    <table id="user-tbl"><thead><tr><th>账号</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
+    <details style="margin-top:10px"><summary>＋ 新增用户</summary>
+      <div class="grid2" style="margin-top:8px">
+        <div><label>账号</label><input id="u-name"></div>
+        <div><label>初始密码</label><input id="u-pass" type="password"></div>
+        <div><label>角色</label><select id="u-role"><option value="sales">sales</option><option value="manager">manager</option><option value="admin">admin</option></select></div>
+      </div>
+      <div style="margin-top:8px"><button class="primary" onclick="addUser()">新增</button></div>
+    </details>
+  </div>
+
+  <div class="card" id="card-audit">
+    <h2>审计日志（ADM-315，最近 300 条）</h2>
+    <table><thead><tr><th>时间</th><th>用户</th><th>动作</th><th>对象</th><th>明细</th></tr></thead><tbody id="audit-body"></tbody></table>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let ME = null;
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { location.href = '/login.html'; throw 0; }
+  return res;
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtTime = iso => (iso || '').replace('T', ' ').slice(0, 19);
+
+async function init() {
+  ME = await (await api('/api/me')).json();
+  $('who').textContent = `${ME.name}（${ME.role}）`;
+  const s = await (await api('/api/settings')).json();
+  $('llm-provider').value = s.llm.provider;
+  $('llm-url').value = s.llm.base_url || '';
+  $('llm-model').value = s.llm.model || '';
+  $('llm-auto').value = s.llm.auto ? '1' : '0';
+  if (s.ingest_token) {
+    $('ingest-token').textContent = s.ingest_token;
+    $('recv-cmd').textContent =
+      `# receiver 自动入库（BADGE_SERVER 指向本后台）\n` +
+      `set BADGE_SERVER=http://<本机IP>:8200\n` +
+      `set BADGE_TOKEN=${s.ingest_token}\n` +
+      `node receiver.js`;
+  } else { $('card-recv').style.display = 'none'; }
+  if (ME.role !== 'admin') {
+    $('card-users').style.display = 'none'; $('card-audit').style.display = 'none';
+  } else {
+    loadUsers(); loadAudit();
+  }
+}
+async function saveLlm() {
+  const body = { llm: {
+    provider: $('llm-provider').value, base_url: $('llm-url').value.trim(),
+    model: $('llm-model').value.trim(), auto: $('llm-auto').value === '1',
+  } };
+  if ($('llm-key').value.trim()) body.llm.api_key = $('llm-key').value.trim();
+  const res = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  $('llm-msg').innerHTML = res.ok ? '<span class="ok">✓ 已保存</span>' : `<span class="err">${(await res.json()).error}</span>`;
+}
+async function testLlm() {
+  $('llm-msg').textContent = '测试中…';
+  const res = await api('/api/llm-test', { method: 'POST' });
+  const d = await res.json();
+  $('llm-msg').innerHTML = d.ok
+    ? `<span class="ok">✓ 模型 ${esc(d.model)} 连通</span>：${esc(d.summary).slice(0, 80)}`
+    : `<span class="err">✗ ${esc(d.error)}</span>`;
+}
+async function loadUsers() {
+  const rows = await (await api('/api/users')).json();
+  $('user-tbl').querySelector('tbody').innerHTML = rows.map(u => `
+    <tr><td>${esc(u.name)}</td><td>${u.role}</td>
+    <td>${u.active ? '<span class="ok">启用</span>' : '<span class="err">禁用</span>'}</td>
+    <td>
+      <button onclick="uact(${u.id}, '${u.active ? 'disable' : 'enable'}')">${u.active ? '禁用' : '启用'}</button>
+      <button onclick="resetPass(${u.id}, '${esc(u.name)}')">重置密码</button>
+    </td></tr>`).join('');
+}
+async function addUser() {
+  const res = await api('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: $('u-name').value, password: $('u-pass').value, role: $('u-role').value }) });
+  const d = await res.json();
+  if (!res.ok) { alert(d.error); return; }
+  $('u-name').value = ''; $('u-pass').value = ''; loadUsers();
+}
+async function uact(id, act) { await api(`/api/users/${id}/${act}`, { method: 'POST' }); loadUsers(); loadAudit(); }
+async function resetPass(id, name) {
+  const p = prompt(`为 ${name} 设置新密码：`);
+  if (!p) return;
+  await api(`/api/users/${id}/resetpass`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }) });
+  loadAudit();
+}
+async function loadAudit() {
+  const rows = await (await api('/api/audit')).json();
+  $('audit-body').innerHTML = rows.map(a => `
+    <tr><td>${fmtTime(a.ts)}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td><td>${esc(a.target)}</td><td class="evidence">${esc(a.detail)}</td></tr>`).join('');
+}
+init();
+</script>
+</body>
+</html>

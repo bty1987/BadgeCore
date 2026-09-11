@@ -66,6 +66,7 @@ wss.on('connection', (ws, req) => {
   let frameList = []; // 缓存原始 Opus packet，会话结束封装 Ogg
   let frameMs = 60;
   let transcriber = null; // 实时转写器（首帧音频时懒创建）
+  let oggPath = null; // 落盘后的录音文件路径（入库用）
 
   console.log(`\n[WS ] 设备接入 #${stats.sessions} from ${req.socket.remoteAddress} → 会话 ${sessionId}`);
 
@@ -124,7 +125,7 @@ wss.on('connection', (ws, req) => {
     stats.activeWs--;
     let saved = '(无音频)';
     if (frameCount > 0) {
-      const oggPath = filePath;
+      oggPath = filePath;
       fs.writeFileSync(oggPath, buildOggOpus(frameList, frameMs));
       saved = `${path.basename(oggPath)} (${(fs.statSync(oggPath).size / 1024).toFixed(1)}KB)`;
     }
@@ -139,9 +140,35 @@ wss.on('connection', (ws, req) => {
         } else {
           console.log(`[ASR] 会话${sessionId} 无转写内容`);
         }
+        ingestToServer(text || '');
       });
+    } else {
+      ingestToServer('');
     }
   });
+
+  // 自动入库到管理后台（D13）：环境变量 BADGE_SERVER + BADGE_TOKEN（见后台「设置」页）
+  function ingestToServer(transcript) {
+    const base = process.env.BADGE_SERVER;
+    if (!base || frameCount === 0 || !oggPath) return;
+    fetch(base.replace(/\/$/, '') + '/api/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': process.env.BADGE_TOKEN || '' },
+      body: JSON.stringify({
+        created_at: new Date().toISOString(),
+        duration_s: frameCount * frameMs / 1000,
+        audio_path: path.resolve(oggPath),
+        transcript,
+        device: 'xiaozhi-1.75c',
+        owner: '',
+        topic: '',
+      }),
+      signal: AbortSignal.timeout(8000),
+    }).then(r => r.json()).then(d => {
+      if (d.id) console.log(`[API] 已入库后台 comm#${d.id}${d.analyzed ? '（自动分析完成）' : ''}`);
+      else console.log(`[API] 入库被拒: ${d.error || JSON.stringify(d)}`);
+    }).catch(e => console.log(`[API] 入库失败: ${e.message}`));
+  }
   ws.on('error', (e) => console.log(`[WS ] 错误: ${e.message}`));
 });
 
@@ -153,6 +180,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`  音频通道:  ws://<本机IP>:${PORT}/xiaozhi/v1/`);
   console.log(`  录制目录:  ${SESSIONS_DIR}`);
   console.log(`  实时转写:  ${XF_CONFIG ? '已启用（讯飞流式听写）' : '未启用（缺凭据，仅录制；配置见 asr.config.example.json）'}`);
+  console.log(`  自动入库:  ${process.env.BADGE_SERVER ? `→ ${process.env.BADGE_SERVER}` : '未启用（设 BADGE_SERVER/BADGE_TOKEN 环境变量，令牌见后台设置页）'}`);
   console.log('==============================================');
 });
 

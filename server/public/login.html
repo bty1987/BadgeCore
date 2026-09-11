@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · BadgeCore</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="login-box">
+  <div class="brand">BadgeCore 员工数字工牌</div>
+  <div class="card">
+    <label>账号</label>
+    <input id="name" autocomplete="username" placeholder="admin">
+    <label>密码</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <div style="margin-top:16px">
+      <button class="primary" style="width:100%" onclick="login()">登 录</button>
+    </div>
+    <div id="msg" class="muted" style="margin-top:10px"></div>
+  </div>
+</div>
+<script>
+async function login() {
+  const res = await fetch('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name_.value, password: password.value }),
+  });
+  const data = await res.json();
+  if (res.ok) location.href = '/';
+  else msg.innerHTML = `<span class="err">${data.error}</span>`;
+}
+document.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+// name 是全局变量陷阱规避
+const name_ = document.getElementById('name'), password = document.getElementById('password'),
+      msg = document.getElementById('msg');
+</script>
+</body>
+</html>

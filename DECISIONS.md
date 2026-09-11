@@ -72,13 +72,19 @@
 - **依赖**：讯飞 Key（听写实测）、LLM API Key（分析管道）、一台内网部署机。
 - **放弃**：BLE GATT 协议与伴生 App 连调（HARDWARE-LOG 第 7 条转量产期）、REC-01/02 的 App 交互形态（Web 顶住，设备端仍可用唤醒词/按键触发录音）。
 
+### D13 后台技术栈：Node 零依赖栈（内置 http + node:sqlite + 原生 fetch + 无构建前端）
+- **决策**：管理后台用 Node 内置能力实现——`node:http` 路由、`node:sqlite` 存储（Node ≥22.5，本机 24.11）、原生 `fetch` 调 LLM、前端为无构建步骤的原生 HTML/JS 静态页。零 npm 依赖、与 receiver 同生态。
+- **已交付（2026-09-11，均自测通过）**：`server/` 后台 v0.1——登录/会话鉴权、沟通记录（列表/详情/删除/数据范围 sales=本人）、九大域配置 CRUD（ADM-01x，含违规项 typical/exemption 必填结构）、设置（LLM 配置，Key 只写不读）、用户管理、审计日志（ADM-315）、receiver 自动入库通道（令牌鉴权）；LLM 分析管道 `analysis.js`（06 册 AI-04~06，OpenAI 兼容 + Mock 供应商，报告骨架/竞品计数/待办提取/AI 标识自测通过）；冒烟测试 `smoke-test.js` 33 项全过；端到端（sim-device→receiver→自动入库→后台）实测通过。部署：`deploy/`（Windows start.bat + Docker/compose）。
+- **理由**：内部单机使用，零依赖=免安装免运维免安全审计面；node:sqlite 虽标记 experimental 但单机内部场景风险可控；better-sqlite3 等原生模块在 Windows 有编译风险被放弃。
+- **放弃**：Express/Koa（依赖无必要）、Vue/React 构建（内部工具无构建收益）、PG（单机无并发压力）。
+
 ## 待决策（Open Questions）
 
 - [x] ASR 一期选讯飞（2026-09-11 D11）；实测质量不达标再启火山
-- [ ] 讯飞实测：板子重录样本 → `asr-xunfei.js` vs 本地 whisper 对照（06 册 CER 目标可放宽，内部使用）
-- [ ] 说话人分离方案：讯飞「语音转写」文件版 vs 本地 pyannote（Key 到位后实测，D12）
-- [ ] LLM 供应商选型（分析管道用，OpenAI 兼容协议接入，候选 GLM/DeepSeek/Qwen——CMP-15 数据协议优先国内大厂）
-- [ ] 后台技术栈定稿（建议：单仓库 Node 服务 + SQLite/PG + 服务端渲染或 Vue，内部使用够用即可）
+- [ ] 讯飞实测（听写 `asr-xunfei.js` + 转写分离 `asr-xf-transcribe.js`）：注册→订阅两个服务→填 Key→板子重录样本跑通（转写需购买/领取时长）
+- [x] 说话人分离方案：讯飞「语音转写」文件版（客户端已交付，待 Key 实测；pyannote 备选放弃——Python 3.14 无 torch）
+- [ ] LLM 供应商选型（管道已就绪：设置页填 Base URL/模型/Key 即可，OpenAI 兼容，候选 GLM/DeepSeek/Qwen）
+- [x] 后台技术栈定稿（2026-09-11 D13：Node 零依赖栈）
 - [ ] 实时辅助一期做规则触发还是 LLM 流式（建议规则先行）
 - [ ] 方案商询价（3 家比价，拿着 02 册需求表）——已推迟（D11/D12），内部版验证后再启动
 - [ ] Omi 海淘是否下单（App 参考价值高，D12 后仅作量产期参考，优先级降）

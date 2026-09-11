@@ -48,6 +48,8 @@
 - 联调（无板子）：`node sim-device.js --seconds 5 --pace realtime`（模拟设备连本机 receiver 推正弦音）
 - 转写（本地）：`python transcribe.py sessions/<文件>.ogg small`（faster-whisper，HF_ENDPOINT 镜像 + HF_HUB_DISABLE_XET=1）
 - 转写（云端·讯飞听写，文件版）：`node asr-xunfei.js sessions/<文件>.ogg`——自动 PyAV 解码→16k PCM→40ms 分片推流→超 55s 自动分段→写 `<文件>.xf.txt`；凭据放 `asr.config.json`（照 `asr.config.example.json` 填，已 gitignore，严禁入库）或环境变量 XF_APPID/XF_API_KEY/XF_API_SECRET
+- 转写（云端·讯飞转写 lfasr，**说话人分离**）：`node asr-xf-transcribe.js sessions/<文件>.ogg [--speakers 0]`——ogg 自动转 WAV 上传（lfasr 不收 ogg）→轮询→写 `<文件>.spk.txt`（说话人对话体）+ `.spk.json`（bg/ed/speaker 句子数组，后台分析用）；⚠️ 需单独订阅「语音转写」并领取/购买时长；短音频可能排队
+- 自动入库：receiver 设 `BADGE_SERVER`+`BADGE_TOKEN`（令牌见后台设置页）→ 会话结束自动 POST /api/ingest（含转写文本），后台按设置自动跑 LLM 分析（D13）
 - 录音产物：`receiver/sessions/*.ogg`（标准 Ogg Opus，可直接播放/转写）+ `*.xf.txt`（实时转写全文）
 
 ## 五、踩坑实录（2026-09-10 首次刷机）

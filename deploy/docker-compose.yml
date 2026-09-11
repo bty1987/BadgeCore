@@ -1,0 +1,29 @@
+# BadgeCore 内网部署（Linux 单机）：后台 + 接收端
+# 用法：docker compose -f deploy/docker-compose.yml up -d --build
+# 数据卷：badgecore-data（后台 SQLite）、badgecore-sessions（录音 ogg）
+services:
+  server:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    ports: ["8200:8200"]
+    volumes: [badgecore-data:/app/server/data]
+    restart: unless-stopped
+  receiver:
+    image: node:24-alpine
+    working_dir: /app
+    command: sh -c "npm i --omit=dev && node receiver.js"
+    ports: ["8100:8100"]
+    volumes:
+      - ../hardware/receiver:/app
+      - badgecore-sessions:/app/sessions
+    environment:
+      # 讯飞凭据（可选，启用实时转写；或挂载 asr.config.json）
+      XF_APPID: ${XF_APPID:-}
+      XF_API_KEY: ${XF_API_KEY:-}
+      XF_API_SECRET: ${XF_API_SECRET:-}
+      # 自动入库（令牌见 server 日志/设置页）
+      BADGE_SERVER: http://server:8200
+      BADGE_TOKEN: ${BADGE_TOKEN:-}
+    restart: unless-stopped
+volumes:
+  badgecore-data:
+  badgecore-sessions:

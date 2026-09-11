@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沟通记录 · BadgeCore</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">BadgeCore</span>
+  <nav>
+    <a href="/" class="active">沟通记录</a>
+    <a href="/config.html">沟通配置</a>
+    <a href="/settings.html">设置</a>
+  </nav>
+  <span class="spacer"></span><span class="who" id="who"></span>
+  <button onclick="logout()">退出</button>
+</div>
+<div class="wrap">
+  <div class="card">
+    <div class="grid2" style="align-items:end">
+      <div>
+        <label>搜索（主题/转写内容）</label>
+        <input id="q" placeholder="关键词…" onkeydown="if(event.key==='Enter')load()">
+      </div>
+      <div>
+        <label>状态</label>
+        <select id="status" onchange="load()">
+          <option value="">全部</option>
+          <option value="recorded">已录制</option>
+          <option value="transcribed">已转写</option>
+          <option value="analyzing">分析中</option>
+          <option value="analyzed">已分析</option>
+          <option value="failed">失败</option>
+        </select>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <table id="tbl">
+      <thead><tr><th>#</th><th>时间</th><th>主题</th><th>时长</th><th>意向</th><th>状态</th><th>归属</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted" id="empty" style="padding:16px;display:none">
+      暂无记录——设备录音会话结束后由 receiver 自动入库；也可在设置页查看入库令牌手动推送。
+    </div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer">
+  <button onclick="drawer.classList.remove('open')" style="float:right">✕ 关闭</button>
+  <h2 id="d-title"></h2>
+  <div class="muted" id="d-meta"></div>
+  <div id="d-actions" style="margin:12px 0"></div>
+  <div id="d-report"></div>
+  <h3>转写全文</h3>
+  <div class="transcript" id="d-transcript"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let ME = null;
+const drawer = $('drawer');
+
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { location.href = '/login.html'; throw new Error('未登录'); }
+  return res;
+}
+
+async function init() {
+  const me = await (await api('/api/me')).json();
+  ME = me; $('who').textContent = `${me.name}（${roleName(me.role)}）`;
+  await load();
+}
+
+function roleName(r) { return { admin: '管理员', manager: '经理', sales: '销售' }[r] || r; }
+function fmtTime(iso) { return (iso || '').replace('T', ' ').slice(0, 16); }
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function load() {
+  const q = encodeURIComponent($('q').value), status = $('status').value;
+  const rows = await (await api(`/api/communications?q=${q}&status=${status}`)).json();
+  const tb = $('tbl').querySelector('tbody');
+  tb.innerHTML = rows.map(r => `
+    <tr class="rowlink" onclick="detail(${r.id})">
+      <td>${r.id}</td><td>${fmtTime(r.created_at)}</td><td>${esc(r.topic) || '(未命名)'}</td>
+      <td>${r.duration_s ? r.duration_s.toFixed(0) + 's' : '-'}</td>
+      <td>${r.intention ? `<span class="badge ${r.intention.level === '高' ? 'high' : r.intention.level === '中' ? 'mid' : 'low'}">${r.intention.level} ${r.intention.score}</span>` : '-'}</td>
+      <td><span class="badge ${r.status}">${{recorded:'已录制',transcribed:'已转写',analyzing:'分析中',analyzed:'已分析',failed:'失败'}[r.status] || r.status}</span></td>
+      <td>${esc(r.owner) || '-'}</td>
+    </tr>`).join('');
+  $('empty').style.display = rows.length ? 'none' : 'block';
+}
+
+async function detail(id) {
+  const r = await (await api(`/api/communications/${id}`)).json();
+  $('d-title').textContent = `#${r.id} ${r.topic || '(未命名沟通)'}`;
+  $('d-meta').textContent = `${fmtTime(r.created_at)} · ${r.duration_s.toFixed(0)}s · 归属 ${r.owner || '-'} · ${r.meta?.device || ''}`;
+  $('d-actions').innerHTML = `<button class="primary" onclick="analyze(${id})">${r.report ? '重新分析' : '生成分析报告'}</button>`;
+  renderReport(r.report);
+  $('d-transcript').textContent = r.transcript || '(无转写)';
+  drawer.classList.add('open');
+}
+
+async function analyze(id) {
+  $('d-actions').querySelector('button').disabled = true;
+  const res = await api(`/api/communications/${id}/analyze`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) { alert('分析失败：' + data.error); return; }
+  renderReport(data.report);
+  $('d-actions').querySelector('button').disabled = false;
+  load();
+}
+
+function renderReport(rp) {
+  if (!rp) { $('d-report').innerHTML = '<div class="muted">尚未生成分析报告。</div>'; return; }
+  const lvl = l => ({ 高: 'high', 中: 'mid', 低: 'low' }[l] || 'low');
+  $('d-report').innerHTML = `
+    <h3>摘要</h3><div>${esc(rp.summary)}</div>
+    ${rp.key_facts?.length ? `<h3>关键信息</h3><ul class="plain">${rp.key_facts.map(f => `<li><b>${esc(f.k)}</b>：${esc(f.v)}</li>`).join('')}</ul>` : ''}
+    <h3>客户立场</h3>
+    <div class="grid2">
+      <div><b class="ok">认同</b><ul class="plain">${(rp.stance?.support || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">无</li>'}</ul></div>
+      <div><b class="err">顾虑</b><ul class="plain">${(rp.stance?.concerns || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">无</li>'}</ul></div>
+    </div>
+    ${rp.competitors?.length ? `<h3>竞品提及</h3><div class="chips">${rp.competitors.map(c => `<span class="chip">${esc(c.name)} ×${c.mentions}</span>`).join('')}</div>` : ''}
+    ${rp.intention ? `<h3>意向度</h3><div><span class="score">${rp.intention.score}</span> <span class="badge ${lvl(rp.intention.level)}">${rp.intention.level}</span>
+      <ul class="plain">${rp.intention.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    ${rp.tasks?.length ? `<h3>任务达成（${rp.tasks.filter(t => t.status === '完成').length}/${rp.tasks.length}）</h3>
+      <table><thead><tr><th>检查项</th><th>状态</th><th>依据</th></tr></thead><tbody>
+      ${rp.tasks.map(t => `<tr><td>${esc(t.item)}</td><td><span class="badge ${t.status === '完成' ? 'analyzed' : t.status === '不充分' ? 'mid' : 'low'}">${t.status}</span></td><td class="evidence">${esc(t.evidence)}</td></tr>`).join('')}
+      </tbody></table>` : ''}
+    ${rp.violations?.length ? `<h3>违规检测（命中 ${rp.violations.length} 项）</h3>
+      <table><thead><tr><th>违规项</th><th>严重级</th><th>触发片段</th></tr></thead><tbody>
+      ${rp.violations.map(v => `<tr><td>${esc(v.item)}</td><td><span class="badge ${v.severity === '高' ? 'high' : 'mid'}">${v.severity}</span></td><td class="evidence">${esc(v.evidence)}</td></tr>`).join('')}
+      </tbody></table>` : `<h3>违规检测</h3><div class="muted">已完成全量违规项检测，未发现任何违规内容</div>`}
+    ${rp.todos?.length ? `<h3>待办</h3><ul class="plain">${rp.todos.map(t => `<li>${esc(t.what)}${t.due ? `（${esc(t.due)}）` : ''}</li>`).join('')}</ul>` : ''}
+    ${rp.meta?.warnings?.length ? `<h3>分析警告</h3><ul class="plain">${rp.meta.warnings.map(w => `<li class="err">${esc(w)}</li>`).join('')}</ul>` : ''}
+    <div class="footnote">以上内容由 AI 生成（模型：${esc(rp.meta?.model || '?')}，${fmtTime(rp.meta?.generated_at)}），仅供参考。</div>`;
+}
+
+async function logout() { await api('/api/logout', { method: 'POST' }); location.href = '/login.html'; }
+init();
+</script>
+</body>
+</html>

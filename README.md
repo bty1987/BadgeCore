@@ -12,7 +12,9 @@
 | PRD v0.1 | ✅ 完成 | `prd/` 目录；企业内部使用，v0.1 即工作基线（D11，不做正式评审） |
 | 硬件选型 | ✅ 完成 | 开发载体微雪 ESP32-S3-Touch-AMOLED-1.75C 已验收 |
 | 软件管道 | ✅ 打通 | 录音推流 → 服务端 → OPUS → 转写；receiver v0.3 含实时转写（`hardware/receiver/`） |
-| 云 ASR 接入 | ⏳ 进行中 | 讯飞听写已集成（文件 `asr-xunfei.js` + 实时 `asr-live.js`，模拟设备自测通过），待填 Key 实测（D11/D12） |
+| 云 ASR 接入 | ⏳ 待 Key | 讯飞听写（实时+文件）与语音转写（说话人分离）客户端均已交付，待 Key 实测（D11/D12） |
+| LLM 分析管道 | ✅ Mock 通过 | 06 册 AI-04~06 报告管道（`server/analysis.js`），换真实供应商仅需设置页填 Key |
+| 管理后台 | ✅ v0.1 | 沟通记录/报告/九大域配置/权限/审计/自动入库（`server/`，冒烟 33/33，D13） |
 | 产品硬件 | ⏳ 暂缓 | 开发板验证全链路后再启动方案商询价（D11） |
 
 ## 目录导航
@@ -21,12 +23,18 @@
 BadgeCore/
 ├── README.md              ← 本文件
 ├── DECISIONS.md           ← 决策日志（为什么这么定，重要）
-├── prd/                   ← 9 册 PRD（00 导航必读）
+├── prd/                   ← 9 册 PRD（00 导读必读）
 ├── research/              ← SaleSmart 拆解档案 + DayoTag 评估
 │   └── code/              ← 对标产品前端代码包 + 文案库1531条
 ├── evidence/              ← 实测证据（截图 + 页面文本）
 ├── hardware/              ← 硬件开发日志（选型/采购/到货清单/协议要点）
-│   └── receiver/          ← 自研接收服务端（Node.js）
+│   └── receiver/          ← 接收服务端（录制+实时转写+模拟设备，Node.js）
+├── server/                ← 管理后台 + LLM 分析管道（零依赖栈 D13）
+│   ├── index.js           ← API + 静态页服务（8200）
+│   ├── analysis.js        ← 沟通分析管道（OpenAI 兼容 + Mock）
+│   ├── smoke-test.js      ← 冒烟测试（33 项）
+│   └── public/            ← Web 前端（登录/沟通报告/配置/设置）
+├── deploy/                ← 部署（Windows start.bat / Docker compose）
 └── tools/                 ← 工具脚本
 ```
 
@@ -43,16 +51,30 @@ BadgeCore/
 ## 快速开始（开发）
 
 ```bash
-# 启动接收服务端（板子配网高级选项 OTA 地址指向本机即可切流）
+# ① 后台（http://localhost:8200，admin/admin123；首次启动自动建库+生成入库令牌）
+cd server && node index.js                          # 零依赖，Node ≥22.5 即可
+
+# ② 接收端（板子配网高级选项 OTA 地址指向本机即可切流）
 cd hardware/receiver && npm i && node receiver.js   # 监听 8100；配了讯飞凭据则边录边出字
 
-# 没有板子也能联调
+# ③ 打通自动入库（receiver 环境变量，令牌见后台「设置」页）
+set BADGE_SERVER=http://localhost:8200
+set BADGE_TOKEN=<后台设置页的入库令牌>
+#   → 设备录音结束自动进后台，配了 LLM（或 mock）即自动出分析报告
+
+# 没有板子也能全链路联调
 node sim-device.js --seconds 5                      # 模拟设备推音频流
 
 # 转写录音
 python transcribe.py sessions/<xxx>.ogg small       # 本地 faster-whisper
-node asr-xunfei.js sessions/<xxx>.ogg               # 云端·讯飞听写（需先配 asr.config.json）
+node asr-xunfei.js sessions/<xxx>.ogg               # 云端·讯飞听写（需 asr.config.json）
+node asr-xf-transcribe.js sessions/<xxx>.ogg        # 云端·讯飞转写（说话人分离，需订阅转写时长）
+
+# 后台冒烟测试（自包含临时库）
+cd server && node smoke-test.js
 ```
+
+内网部署：Windows 双击 `deploy/start.bat`；Linux 用 `deploy/docker-compose.yml`。
 
 ## 隐私与安全提示
 

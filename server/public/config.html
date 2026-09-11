@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沟通配置 · BadgeCore</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">BadgeCore</span>
+  <nav>
+    <a href="/">沟通记录</a>
+    <a href="/config.html" class="active">沟通配置</a>
+    <a href="/settings.html">设置</a>
+  </nav>
+  <span class="spacer"></span><span class="who" id="who"></span>
+  <button onclick="location='/login.html'">退出</button>
+</div>
+<div class="wrap">
+  <div class="card">
+    <h2>沟通配置九大域（04 册 ADM-01x）</h2>
+    <div class="tabs" id="tabs"></div>
+    <div class="muted" id="domain-help" style="margin-bottom:10px"></div>
+    <table id="tbl">
+      <thead><tr><th>启用</th><th>名称</th><th>内容</th><th style="width:150px">操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <details style="margin-top:14px">
+      <summary>＋ 新增条目</summary>
+      <div class="grid2" style="margin-top:10px">
+        <div><label>名称</label><input id="n-name"></div>
+        <div><label>排序（小在前）</label><input id="n-sort" type="number" value="0"></div>
+      </div>
+      <label>内容（JSON，按域结构填写）</label>
+      <textarea id="n-data">{}</textarea>
+      <div style="margin-top:10px"><button class="primary" onclick="create()">保存新增</button></div>
+    </details>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const DOMAINS = {
+  info_fields:      { label: '信息收集',   help: 'data: {type:"文本|单选|多选|数字|日期", desc:"说明", examples:["采集问句示例"]}' },
+  deal_models:      { label: '成交模型',   help: 'data: {scene:"场景说明", items:["关键行为检查项", …]} → 意向度评分依据（ANA-05）' },
+  task_models:      { label: '任务模型',   help: 'data: {items:["任务项", …]} → 报告任务达成三态判定（ANA-06）' },
+  ability_models:   { label: '能力模型',   help: 'data: {items:[{name:"能力名", behavior:"行为表现定义"}]}' },
+  summary_templates:{ label: '沟通总结模板', help: 'data: {fields:["模板字段", …]}，按环节套用' },
+  analysis_dims:    { label: '分析维度',   help: 'data: {key:"summary|stance|competitors|intention|tasks|violations"} 控制报告启用维度' },
+  flows:            { label: '沟通流程',   help: 'data: {steps:["环节1","环节2", …]}' },
+  violations:       { label: '违规检测',   help: 'data: {trigger:"触发描述", typical:"典型话术示例（必填）", exemption:"非违规判定说明（必填，语义判活关键）"}' },
+  competitors:      { label: '竞争对手',   help: 'data: {products:["产品线"], notes:"优劣势素材"}，name 即竞品名（识别词典）' },
+};
+let domain = 'deal_models', ME = null;
+
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { location.href = '/login.html'; throw 0; }
+  return res;
+}
+async function init() {
+  const me = await (await api('/api/me')).json();
+  ME = me; $('who').textContent = `${me.name}（${me.role}）`;
+  if (me.role !== 'admin') { document.body.innerHTML = '<div class="wrap"><div class="card err">仅管理员可访问配置页。</div></div>'; return; }
+  $('tabs').innerHTML = Object.entries(DOMAINS).map(([k, v]) =>
+    `<button data-d="${k}" onclick="switchDomain('${k}')">${v.label}</button>`).join('');
+  switchDomain('deal_models');
+}
+function switchDomain(d) {
+  domain = d;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.d === d));
+  $('domain-help').textContent = DOMAINS[d].help;
+  load();
+}
+async function load() {
+  const rows = await (await api(`/api/config/${domain}`)).json();
+  $('tbl').querySelector('tbody').innerHTML = rows.map(r => `
+    <tr>
+      <td><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggle(${r.id}, this.checked)"></td>
+      <td contenteditable id="name-${r.id}" onblur="save(${r.id})">${esc(r.name)}</td>
+      <td><textarea style="min-height:60px" id="data-${r.id}" onblur="save(${r.id})">${esc(JSON.stringify(r.data, null, 1))}</textarea></td>
+      <td><button onclick="save(${r.id})">保存</button> <button class="danger" onclick="del(${r.id})">删除</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" class="muted" style="padding:14px">本域暂无条目，展开下方「新增条目」添加。</td></tr>';
+}
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+async function save(id) {
+  const name = $(`name-${id}`).textContent.trim();
+  let data; try { data = JSON.parse($(`data-${id}`).value); } catch { alert('JSON 格式有误，未保存'); return; }
+  const enabled = true; // 启用状态由 checkbox 单独管理
+  await api(`/api/config/${domain}/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, data, enabled }) });
+  flash('已保存');
+}
+async function toggle(id, enabled) {
+  const name = $(`name-${id}`).textContent.trim();
+  let data; try { data = JSON.parse($(`data-${id}`).value); } catch { data = {}; }
+  await api(`/api/config/${domain}/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, data, enabled }) });
+  flash(enabled ? '已启用' : '已停用');
+}
+async function del(id) {
+  if (!confirm('确认删除该条目？')) return;
+  await api(`/api/config/${domain}/${id}`, { method: 'DELETE' }); load();
+}
+async function create() {
+  let data; try { data = JSON.parse($('n-data').value); } catch { alert('JSON 格式有误'); return; }
+  await api(`/api/config/${domain}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: $('n-name').value, data, sort: Number($('n-sort').value) || 0 }) });
+  $('n-name').value = ''; $('n-data').value = '{}'; load(); flash('已新增');
+}
+let flashTimer;
+function flash(t) {
+  let el = $('flash'); if (!el) { el = document.createElement('div'); el.id = 'flash'; el.className = 'muted ok'; $('tabs').after(el); }
+  el.textContent = '✓ ' + t; clearTimeout(flashTimer); flashTimer = setTimeout(() => el.textContent = '', 1500);
+}
+init();
+</script>
+</body>
+</html>

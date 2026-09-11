@@ -30,3 +30,6 @@ sessions/
 # 云 ASR 凭据（严禁入库）
 hardware/receiver/asr.config.json
 *.pcm
+
+# 后台数据库与运行数据
+server/data/
