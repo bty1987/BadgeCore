@@ -9,7 +9,7 @@
 - 传感器：4× MEMS 数字麦（16kHz/24bit，5m 拾音）、NFC 安全单元（门禁）、2.13″ 墨水屏、六轴 IMU（佩戴检测）
 - 传输：一期 BLE 5.3 桥接手机 App；二期 4G 版
 - 续航目标：录音 ≥12h / 全员待机 ≥5 天；BOM ≤180 元
-- 行动项：拿 02 册需求表找 3 家深圳方案商询价（固件源码交付是必要条件）
+- 行动项：拿 02 册需求表找 3 家深圳方案商询价（固件源码交付是必要条件）——2026-09-11 D11 推迟：开发板先验证录音→转写全链路
 
 ## 二、开发期载体（本目录管理的实物）
 
@@ -35,7 +35,7 @@
 3. ✅ **搭接收端**：`receiver/receiver.js`（Node.js，自研，xiaozhi 协议）
 4. ✅ **切流**：板子配网页「高级选项」填 OTA 地址 `http://<本机IP>:8100/xiaozhi/ota/` → 设备自动连自建服务（**无需重编译固件**）
 5. ✅ **转写**：faster-whisper small 本地转写通过（「修复完成」「今天到这里正好…」等样本全对）
-6. ⏳ **接云端 ASR**：讯飞/火山对比（下一步）
+6. 🔄 **接云端 ASR**：讯飞流式听写客户端已就位（`asr-xunfei.js` + `decode-pcm.py`，2026-09-11，D11），待注册讯飞填 Key 实测
 7. ⏳ **BLE 侧**：GATT 协议定义，伴生 App 连调
 
 ## 四、当前固件与服务
@@ -43,7 +43,8 @@
 - 固件：xiaozhi v2.4.2（esp32-s3-touch-amoled-1.75c 专用构建）
 - 服务端：`receiver/receiver.js`（Node.js + ws），OTA 接口 + WS 音频通道 + Ogg 落盘，端口 8100
 - 启动：`cd hardware/receiver && npm i && node receiver.js`
-- 转写：`python transcribe.py sessions/<文件>.ogg small`（faster-whisper，HF_ENDPOINT 镜像 + HF_HUB_DISABLE_XET=1）
+- 转写（本地）：`python transcribe.py sessions/<文件>.ogg small`（faster-whisper，HF_ENDPOINT 镜像 + HF_HUB_DISABLE_XET=1）
+- 转写（云端·讯飞听写）：`node asr-xunfei.js sessions/<文件>.ogg`——自动 PyAV 解码→16k PCM→40ms 分片推流→超 55s 自动分段→写 `<文件>.xf.txt`；凭据放 `asr.config.json`（照 `asr.config.example.json` 填，已 gitignore，严禁入库）
 - 录音产物：`receiver/sessions/*.ogg`（标准 Ogg Opus，可直接播放/转写）
 
 ## 五、踩坑实录（2026-09-10 首次刷机）

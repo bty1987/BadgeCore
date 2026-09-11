@@ -26,3 +26,7 @@ sessions/
 
 # 迁移残留（禁止回写）
 *.bak
+
+# 云 ASR 凭据（严禁入库）
+hardware/receiver/asr.config.json
+*.pcm
