@@ -1,0 +1,394 @@
+[
+ {
+  "file": "xmate-login-登录页",
+  "ok": true,
+  "size": 61362,
+  "textLen": 173,
+  "redirected": false
+ },
+ {
+  "file": "xmate-coach-销售端首页",
+  "ok": true,
+  "size": 61362,
+  "textLen": 173,
+  "redirected": false
+ },
+ {
+  "file": "xmate-coach-销售端沟通记录",
+  "ok": true,
+  "size": 32933,
+  "textLen": 53,
+  "redirected": false
+ },
+ {
+  "file": "xmate-coach-销售端沟通计划",
+  "ok": true,
+  "size": 45127,
+  "textLen": 228,
+  "redirected": false
+ },
+ {
+  "file": "xmate-coach-销售端客户列表",
+  "ok": true,
+  "size": 37739,
+  "textLen": 100,
+  "redirected": false
+ },
+ {
+  "file": "xmate-coach-销售端线索",
+  "ok": true,
+  "size": 61362,
+  "textLen": 173,
+  "redirected": false
+ },
+ {
+  "file": "xmate-coach-销售端案例库",
+  "ok": true,
+  "size": 59868,
+  "textLen": 277,
+  "redirected": false
+ },
+ {
+  "file": "xmate-commander-指挥舱工作台",
+  "ok": true,
+  "size": 32312,
+  "textLen": 65,
+  "redirected": false
+ },
+ {
+  "file": "xmate-commander-运营看板",
+  "ok": true,
+  "size": 56353,
+  "textLen": 133,
+  "redirected": false
+ },
+ {
+  "file": "xmate-commander-绩效",
+  "ok": true,
+  "size": 44073,
+  "textLen": 107,
+  "redirected": false
+ },
+ {
+  "file": "xmate-commander-团队报告",
+  "ok": true,
+  "size": 31510,
+  "textLen": 41,
+  "redirected": false
+ },
+ {
+  "file": "xmate-commander-业务洞察",
+  "ok": true,
+  "size": 52721,
+  "textLen": 145,
+  "redirected": false
+ },
+ {
+  "file": "xmate-commander-团队客户",
+  "ok": true,
+  "size": 48262,
+  "textLen": 85,
+  "redirected": false
+ },
+ {
+  "file": "xmate-commander-团队成员",
+  "ok": true,
+  "size": 39576,
+  "textLen": 81,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-信息收集",
+  "ok": true,
+  "size": 105068,
+  "textLen": 14628,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-成交模型",
+  "ok": true,
+  "size": 78812,
+  "textLen": 383,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-任务模型",
+  "ok": true,
+  "size": 115296,
+  "textLen": 1768,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-能力模型",
+  "ok": true,
+  "size": 161055,
+  "textLen": 1091,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-沟通总结模板",
+  "ok": true,
+  "size": 91768,
+  "textLen": 288,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-沟通分析维度",
+  "ok": true,
+  "size": 65800,
+  "textLen": 145,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-沟通流程",
+  "ok": true,
+  "size": 52536,
+  "textLen": 232,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-竞争对手",
+  "ok": true,
+  "size": 77096,
+  "textLen": 355,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-违规检测",
+  "ok": true,
+  "size": 198927,
+  "textLen": 1270,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-全局配置",
+  "ok": true,
+  "size": 66919,
+  "textLen": 208,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-客户列表",
+  "ok": true,
+  "size": 103725,
+  "textLen": 1216,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-客户字段",
+  "ok": true,
+  "size": 47578,
+  "textLen": 175,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-客户状态",
+  "ok": true,
+  "size": 47578,
+  "textLen": 175,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-客户类型",
+  "ok": true,
+  "size": 47578,
+  "textLen": 175,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-画像配置",
+  "ok": true,
+  "size": 114439,
+  "textLen": 1853,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-线索列表",
+  "ok": true,
+  "size": 114439,
+  "textLen": 1853,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-线索状态",
+  "ok": true,
+  "size": 114439,
+  "textLen": 1853,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-商机字段",
+  "ok": true,
+  "size": 114439,
+  "textLen": 1853,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-洞察模板",
+  "ok": true,
+  "size": 114439,
+  "textLen": 1853,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-洞察分类",
+  "ok": true,
+  "size": 49751,
+  "textLen": 216,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-访前准备",
+  "ok": true,
+  "size": 49751,
+  "textLen": 216,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-访后分析",
+  "ok": true,
+  "size": 49751,
+  "textLen": 216,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-知识库",
+  "ok": true,
+  "size": 177477,
+  "textLen": 1731,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-案例库管理",
+  "ok": true,
+  "size": 36340,
+  "textLen": 173,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-风险预警",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-使用情况",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-场景应对模型",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-商品管理",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-产品类型",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-联系人字段",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-联系人角色",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-赋能教练配置",
+  "ok": true,
+  "size": 63491,
+  "textLen": 306,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-AskAI配置",
+  "ok": true,
+  "size": 70482,
+  "textLen": 394,
+  "redirected": false
+ },
+ {
+  "file": "xmate-admin-机构要素",
+  "ok": true,
+  "size": 70482,
+  "textLen": 394,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-部门管理",
+  "ok": true,
+  "size": 35476,
+  "textLen": 166,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-员工名册",
+  "ok": true,
+  "size": 34925,
+  "textLen": 166,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-恢复账号",
+  "ok": true,
+  "size": 34988,
+  "textLen": 166,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-岗位管理",
+  "ok": true,
+  "size": 34908,
+  "textLen": 166,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-职级管理",
+  "ok": true,
+  "size": 35346,
+  "textLen": 166,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-角色权限",
+  "ok": true,
+  "size": 35346,
+  "textLen": 166,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-用户组",
+  "ok": true,
+  "size": 82462,
+  "textLen": 166,
+  "redirected": false
+ },
+ {
+  "file": "xmate-manage-企业设置",
+  "ok": true,
+  "size": 61677,
+  "textLen": 214,
+  "redirected": false
+ }
+]
