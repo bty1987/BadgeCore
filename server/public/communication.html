@@ -15,24 +15,39 @@ const id = new URLSearchParams(location.search).get('id');
   const main = mountAppShell('comm', me.name);
   if (!id) { main.innerHTML = '<div class="card">缺少 id 参数</div>'; return; }
   const c = await api('/api/communications/' + id);
-  let rp = null; try { rp = JSON.parse(c.report || 'null'); } catch {}
+  let rp = c.report && typeof c.report === 'object' ? c.report : (typeof c.report === 'string' ? (() => { try { return JSON.parse(c.report); } catch { return null; } })() : null);
   const stMap = { recorded: '已录制', transcribed: '已转写', analyzing: '分析中', analyzed: '已分析' };
   main.innerHTML = `
     <div class="page-head"><a href="/communications.html">‹ 返回沟通列表</a>
       <h1 style="font-size:16px">${esc(c.topic || '沟通 #' + c.id)}</h1>
       <span class="tag info">${stMap[c.status] || c.status || '-'}</span>
-      <span style="color:var(--text-3);font-size:13px">${fmtTime(c.created_at)} · ${c.duration_s ? Math.floor(c.duration_s / 60) + ' 分 ' + (c.duration_s % 60) + ' 秒' : '时长未知'} · 销售 ${esc(c.owner || '-')}</span>
+      <span style="color:var(--text-3);font-size:13px">${fmtTime(c.created_at)} · ${c.duration_s ? Math.floor(c.duration_s / 60) + ' 分 ' + (c.duration_s % 60) + ' 秒' : '时长未知'} · 销售 ${esc(c.owner || '-')}${c.customer ? ' · 客户 ' + esc(c.customer.name) : ''}</span>
       <span class="spacer"></span>
       <button class="btn" onclick="reanalyze()">重新分析</button></div>
     <div class="tabbar">
       <a class="active" onclick="show(0,this)">字幕全文</a><a onclick="show(1,this)">摘要</a>
       <a onclick="show(2,this)">分析报告</a><a onclick="show(3,this)">待办</a>
     </div>
-    <div class="card" id="pane0" style="white-space:pre-wrap;line-height:2">${c.transcript ? esc(c.transcript) : '<div class="empty"><div class="icon">🎙️</div>转写尚未完成</div>'}</div>
-    <div class="card" id="pane1" style="display:none">${rp?.summary ? esc(rp.summary) : '<div class="empty"><div class="icon">📝</div>暂无摘要，等待分析完成</div>'}</div>
+    <div class="card" id="pane0">${c.transcript ? renderTranscript(c.transcript) : '<div class="empty"><div class="icon">🎙️</div>转写尚未完成</div>'}</div>
+    <div id="pane1" style="display:none">
+      <div class="card" style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:10px">全文摘要（ANA-01）</div>
+        <div style="line-height:2;color:var(--text)">${rp?.summary ? esc(rp.summary) : '<div class="empty"><div class="icon">📝</div>暂无摘要，等待分析完成</div>'}</div></div>
+      ${rp?.key_facts?.length ? '<div class="card"><div style="font-weight:600;margin-bottom:10px">关键信息抽取</div><table class="tbl"><tbody>' + rp.key_facts.map(kf => '<tr><td style="width:150px;color:var(--text-2)">' + esc(kf.k) + '</td><td>' + esc(kf.v) + '</td></tr>').join('') + '</tbody></table></div>' : ''}
+    </div>
     <div id="pane2" style="display:none">${renderReport(rp)}</div>
     <div class="card" id="pane3" style="display:none">${renderTodos(rp)}</div>`;
 
+  const ROLE_COLOR = { '销售': 'info', '设计师': 'info', '客户': 'success', '店长': 'warn' };
+  function renderTranscript(text) {
+    const parts = text.split(/(?=(?:销售|客户|设计师|店长|经理)s*[：:])/).filter(Boolean);
+    if (parts.length <= 1) return '<div style="white-space:pre-wrap;line-height:2">' + esc(text) + '</div>';
+    return parts.map(seg => {
+      const m = seg.match(/^([^：:]{1,4})[：:]s*([sS]*)$/);
+      if (!m) return '<div style="padding:8px 0">' + esc(seg) + '</div>';
+      const role = m[1], color = ROLE_COLOR[role] || 'info';
+      return '<div style="display:flex;gap:10px;padding:7px 0"><span class="tag ' + color + '" style="flex:none;height:fit-content;margin-top:1px">' + esc(role) + '</span><div style="line-height:1.9">' + esc(m[2]) + '</div></div>';
+    }).join('');
+  }
   window.show = (i, el) => {
     document.querySelectorAll('.tabbar a').forEach(a => a.classList.remove('active'));
     el.classList.add('active');
