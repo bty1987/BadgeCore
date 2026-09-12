@@ -41,6 +41,7 @@ BadgeCore/
 │   ├── smoke-test.js      ← 冒烟测试（58 项）
 │   └── public/            ← Web 前端（登录/沟通报告/配置/设置）
 ├── deploy/                ← 部署（Windows start.bat / Docker compose）
+├── docs/                  ← 工程文档（性能容量评估与部署规划）
 └── tools/                 ← 工具脚本
 ```
 
