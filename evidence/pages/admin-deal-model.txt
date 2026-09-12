@@ -1,0 +1,5 @@
+{
+ "ok": true,
+ "url": "https://www.x-mate.com/#/admin/transaction_model",
+ "text": "销售助手\n我的企业\n白\n白添宇\n沟通配置\n信息收集\n成交模型\n任务模型\n能力模型\n沟通总结\n沟通分析\n沟通流程\n违规检测\n竞争对手\n沟通计划\n客户管理\n洞察配置\n风险预警\n知识库\n案例库\n全局配置\nAsk AI\n新建\n名称\n\t\n启用状态\n\t\n场景说明\n\t\n操作\n\n\n客户分析\n\t\n\t\n-\n\t\n编辑\n删除\n\n\nCHAMP\n\t\n\t\n以挑战为核心的方法论，优先关注客户痛点与决策动机。\n\t\n编辑\n删除\n\n\nNEAT\n\t\n\t\n聚焦客户改变动力的方法论，通过量化需求、经济影响与紧迫性来评估商机。\n\t\n编辑\n删除\n\n\nSPICED\n\t\n\t\n注重客户情境和痛点影响，适合问题驱动型销售\n\t\n编辑\n删除\n\n\nBANT\n\t\n\t\n经典资格审查框架，用于快速评估销售机会质量。\n\t\n编辑\n删除\n\n\nMEDDIC\n\t\n\t\n适合大客户、复杂销售场景，强调指标量化和决策链分析\n\t\n编辑\n删除"
+}

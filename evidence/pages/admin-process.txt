@@ -1,0 +1,5 @@
+{
+ "ok": true,
+ "url": "https://www.x-mate.com/#/admin/communication_process",
+ "text": "销售助手\n我的企业\n白\n白添宇\n沟通配置\n信息收集\n成交模型\n任务模型\n能力模型\n沟通总结\n沟通分析\n沟通流程\n违规检测\n竞争对手\n沟通计划\n客户管理\n洞察配置\n风险预警\n知识库\n案例库\n全局配置\nAsk AI\n新建\n流程名称\n\t\n沟通环节\n\t\n关联\n\t\n创建人\n\t\n创建时间\n\t\n操作\n\n\n通用流程\n\t\n\n1. 走馆带展\n\n2. 上门量房\n\n3. 报价谈判\n\n4. 方案沟通与报价谈判\n\n\t\n客户\n\t\n管理员\n\t\n2026-05-13 10:06\n\t\n编辑\n删除"
+}

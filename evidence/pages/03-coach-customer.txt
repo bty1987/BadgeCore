@@ -1,0 +1,5 @@
+{
+ "ok": true,
+ "url": "https://www.x-mate.com/#/coach/customer",
+ "text": "首页\n沟通\n客户\n案例库\n白\n客户\n新建\n沟通环节\n更多筛选\n客户名称\n\t\n沟通环节\n\t\n预警\n\t\n客户分析\n\t\n客户画像\n\t\n沟通动态\n\t\n沟通次数\n\t\n协同跟进人\n\t\n待办\n暂无数据"
+}

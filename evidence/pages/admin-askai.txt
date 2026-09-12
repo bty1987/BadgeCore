@@ -1,0 +1,5 @@
+{
+ "ok": true,
+ "url": "https://www.x-mate.com/#/admin/ask_ai",
+ "text": "销售助手\n我的企业\n白\n白添宇\n沟通配置\n信息收集\n成交模型\n任务模型\n能力模型\n沟通总结\n沟通分析\n沟通流程\n违规检测\n竞争对手\n沟通计划\n字段设置\n客户管理\n客户列表\n字段设置\n画像配置\n洞察配置\n风险预警\n知识库\n案例库\n全局配置\nAsk AI\nAsk AI\n/ 常见提问与定时任务配置\nAsk SalesCoach\n销售视角\nAsk SalesCommander\n管理视角\n常见提问\n0 / 10 条\n+ 新增提问\n#\n\t\n标题\n\t\n描述\n\t\n操作\n暂无数据\n定时任务收件人＝销售本人\n0 / 10 个\n+ 新建定时任务\n💡 数据时间范围（前一天/当天、前一周/当周、前一月/当月）直接写在任务描述里，由 AI 解析。\n任务名称\n\t\n任务描述\n\t\n定时\n\t\n推送范围\n\t\n状态\n\t\n操作\n暂无数据\n..."
+}
