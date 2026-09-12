@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>我的企业 · 组织架构 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
+<style>
+  .tree { list-style: none; }
+  .tree ul { list-style: none; padding-left: 22px; }
+  .tree .node { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: default; }
+  .tree .node:hover { background: var(--bg); }
+  .tree .node .cnt { color: var(--text-3); font-size: 12px; }
+  .tree .node .ops { margin-left: auto; opacity: 0; }
+  .tree .node:hover .ops { opacity: 1; }
+  .layout-2col { display: grid; grid-template-columns: 340px 1fr; gap: 18px; align-items: start; }
+</style>
+</head>
+<body>
+<div id="top"></div>
+<div class="sidelayout">
+  <div id="side"></div>
+  <div class="main">
+    <div class="tabbar">
+      <a class="active" onclick="switchTab('org')">组织架构</a>
+      <a onclick="switchTab('emp')">员工名册</a>
+      <a onclick="switchTab('dept')">部门管理</a>
+    </div>
+
+    <!-- 组织架构 -->
+    <div id="view-org">
+      <div class="page-head"><h1 style="font-size:15px">组织架构</h1><span class="spacer"></span>
+        <button class="btn primary" onclick="deptDlg()">＋ 新建部门</button></div>
+      <div class="card"><div id="dept-tree" class="tree">加载中…</div></div>
+    </div>
+
+    <!-- 员工名册 -->
+    <div id="view-emp" style="display:none">
+      <div class="page-head"><h1 style="font-size:15px">员工名册</h1><span class="spacer"></span>
+        <button class="btn primary" onclick="userDlg()">＋ 添加员工</button></div>
+      <div class="card" style="padding:0" id="emp-tbl"></div>
+    </div>
+
+    <!-- 部门管理（扁平编辑视图） -->
+    <div id="view-dept" style="display:none">
+      <div class="page-head"><h1 style="font-size:15px">部门管理</h1><span class="spacer"></span>
+        <button class="btn primary" onclick="deptDlg()">＋ 新建部门</button></div>
+      <div class="card" style="padding:0" id="dept-tbl"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let TAB = 'org', DEPTS = [], USERS = [];
+function switchTab(t) {
+  TAB = t;
+  document.querySelectorAll('.tabbar a').forEach((a, i) => a.classList.toggle('active', ['org', 'emp', 'dept'][i] === t));
+  ['org', 'emp', 'dept'].forEach(k => document.getElementById('view-' + k).style.display = k === t ? '' : 'none');
+  load();
+}
+async function load() {
+  [DEPTS, USERS] = await Promise.all([api('/api/depts'), api('/api/users')]);
+  renderTree(); renderEmp(); renderDeptTbl();
+}
+function deptChildren(pid) { return DEPTS.filter(d => (d.parent_id || null) === (pid || null)); }
+function renderTree() {
+  const build = (pid) => {
+    const kids = deptChildren(pid);
+    if (!kids.length) return '';
+    return `<ul>${kids.map(d => `<li>
+      <div class="node">📁 <b>${esc(d.name)}</b><span class="cnt">${d.member_count} 人${d.leader ? ' · 负责人 ' + esc(d.leader) : ''}</span>
+        <span class="ops"><a onclick='deptDlg(${JSON.stringify(d)})'>编辑</a><a style="color:var(--danger)" onclick='delDept(${d.id})'>删除</a>
+        <a onclick='deptDlg(${JSON.stringify({ parent_id: d.id })})'>+子部门</a></span></div>
+      ${build(d.id)}</li>`).join('')}</ul>`;
+  };
+  const roots = build(null);
+  document.getElementById('dept-tree').innerHTML = roots || '<div class="empty"><div class="icon">🏢</div>暂无部门，点击右上角新建</div>';
+}
+function renderDeptTbl() {
+  renderTable(document.getElementById('dept-tbl'), [
+    { key: 'id', title: 'ID', w: '60px' },
+    { key: 'name', title: '部门名称' },
+    { key: 'parent', title: '上级部门', render: r => esc((DEPTS.find(d => d.id === r.parent_id) || {}).name || '-') },
+    { key: 'leader', title: '负责人', render: r => esc(r.leader || '-') },
+    { key: 'member_count', title: '人数', w: '70px' },
+  ], DEPTS, r => `<a onclick='deptDlg(${JSON.stringify(r)})'>编辑</a><a style="color:var(--danger)" onclick='delDept(${r.id})'>删除</a>`);
+}
+function renderEmp() {
+  renderTable(document.getElementById('emp-tbl'), [
+    { key: 'name', title: '姓名', w: '120px' },
+    { key: 'role', title: '角色', render: r => `<span class="tag info">${{ admin: '管理员', manager: '管理者', sales: '销售' }[r.role] || r.role}</span>`, w: '90px' },
+    { key: 'dept_name', title: '所属部门', render: r => esc(r.dept_name || '-') },
+    { key: 'active', title: '状态', render: r => `<span class="tag ${r.active ? 'on' : 'off'}">${r.active ? '在职' : '已禁用'}</span>`, w: '80px' },
+    { key: 'created_at', title: '入职时间', render: r => fmtTime(r.created_at), w: '130px' },
+  ], USERS, r => `
+    <a onclick='userDlg(${JSON.stringify(r)})'>编辑</a>
+    <a onclick='resetPass(${r.id})'>重置密码</a>
+    ${r.active ? `<a style="color:var(--warning)" onclick='toggleUser(${r.id},0)'>禁用</a>` : `<a onclick='toggleUser(${r.id},1)'>启用</a>`}`);
+}
+function deptDlg(item) {
+  item = item || {};
+  dlg().open({
+    title: item.id ? '编辑部门' : '新建部门',
+    body: `
+      <div class="form-item"><label><b>*</b> 部门名称</label><input id="_d_name" value="${esc(item.name || '')}" placeholder="如：华东一部"></div>
+      <div class="form-item"><label>上级部门</label><select id="_d_parent"><option value="">（顶级）</option>
+        ${DEPTS.filter(d => d.id !== item.id).map(d => `<option value="${d.id}" ${d.id === item.parent_id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></div>
+      <div class="form-item"><label>负责人</label><input id="_d_leader" value="${esc(item.leader || '')}" placeholder="部门负责人姓名"></div>`,
+    foot: [
+      { label: '取 消', onClick: d => d.close() },
+      { label: '保 存', cls: 'primary', onClick: async d => {
+          const name = document.getElementById('_d_name').value.trim();
+          if (!name) { toast('请填写部门名称'); return; }
+          const parent = document.getElementById('_d_parent').value;
+          const leader = document.getElementById('_d_leader').value.trim();
+          if (item.id) await api('/api/depts/' + item.id, { method: 'PUT', body: { name, parent_id: parent ? +parent : null, leader } });
+          else await api('/api/depts', { method: 'POST', body: { name, parent_id: parent ? +parent : null, leader } });
+          d.close(); toast('已保存'); load();
+        } },
+    ],
+  });
+}
+async function delDept(id) {
+  dlg().open({ title: '删除部门', body: '<div style="color:var(--text-2)">删除部门不会删除其下员工，员工将变为未分配。确定？</div>',
+    foot: [{ label: '取 消', onClick: d => d.close() }, { label: '删 除', cls: 'danger', onClick: async d => {
+      await api('/api/depts/' + id, { method: 'DELETE' }); d.close(); toast('已删除'); load(); } }] });
+}
+function userDlg(item) {
+  item = item || {};
+  dlg().open({
+    title: item.id ? '编辑员工' : '添加员工',
+    body: `
+      <div class="form-item"><label><b>*</b> 姓名</label><input id="_u_name" value="${esc(item.name || '')}" ${item.id ? 'disabled' : ''} placeholder="员工姓名（登录名）"></div>
+      ${item.id ? '' : '<div class="form-item"><label><b>*</b> 初始密码</label><input id="_u_pass" type="password" placeholder="初始密码，员工登录后可自行修改"></div>'}
+      <div class="form-item"><label>角色</label><select id="_u_role">
+        ${[['sales', '销售'], ['manager', '管理者'], ['admin', '管理员']].map(([v, n]) => `<option value="${v}" ${item.role === v ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="form-item"><label>所属部门</label><select id="_u_dept"><option value="">（未分配）</option>
+        ${DEPTS.map(d => `<option value="${d.id}" ${d.id === item.dept_id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></div>`,
+    foot: [
+      { label: '取 消', onClick: d => d.close() },
+      { label: '保 存', cls: 'primary', onClick: async d => {
+          const name = document.getElementById('_u_name').value.trim();
+          const role = document.getElementById('_u_role').value;
+          const dept = document.getElementById('_u_dept').value;
+          if (item.id) {
+            await api('/api/users/' + item.id, { method: 'PUT', body: { role, dept_id: dept ? +dept : null } });
+          } else {
+            const pass = document.getElementById('_u_pass').value;
+            if (!name || !pass) { toast('请填写姓名和初始密码'); return; }
+            await api('/api/users', { method: 'POST', body: { name, password: pass, role, dept_id: dept ? +dept : null } });
+          }
+          d.close(); toast('已保存'); load();
+        } },
+    ],
+  });
+}
+async function resetPass(id) {
+  dlg().open({ title: '重置密码', body: `<div class="form-item"><label><b>*</b> 新密码</label><input id="_p" type="password"></div>`,
+    foot: [{ label: '取 消', onClick: d => d.close() }, { label: '确 定', cls: 'primary', onClick: async d => {
+      const p = document.getElementById('_p').value; if (!p) { toast('请填写新密码'); return; }
+      await api(`/api/users/${id}/resetpass`, { method: 'POST', body: { password: p } }); d.close(); toast('已重置'); } }] });
+}
+async function toggleUser(id, active) {
+  await api(`/api/users/${id}/${active ? 'enable' : 'disable'}`, { method: 'POST' });
+  toast(active ? '已启用' : '已禁用'); load();
+}
+function init() {
+  document.getElementById('top').innerHTML = adminTopbar('admin');
+  document.getElementById('side').innerHTML = adminSidebar('');
+  loadMe();
+  load();
+}
+init();
+</script>
+</body>
+</html>

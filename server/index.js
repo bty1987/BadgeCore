@@ -607,7 +607,8 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/users') {
     if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
     if (method === 'GET') {
-      return sendJson(res, 200, db.prepare('SELECT id, name, role, active, created_at FROM users ORDER BY id').all());
+      return sendJson(res, 200, db.prepare(
+        'SELECT u.id, u.name, u.role, u.active, u.created_at, u.dept_id, d.name AS dept_name FROM users u LEFT JOIN depts d ON u.dept_id=d.id ORDER BY u.id').all());
     }
     if (method === 'POST') {
       const b = await readBody(req);
@@ -619,6 +620,17 @@ async function handleApi(req, res, url) {
       audit(db, me.name, 'user_create', String(b.name), `role=${b.role}`);
       return sendJson(res, 200, { ok: true });
     }
+  }
+  // 用户更新（ADM-302/303：部门绑定/角色调整；复刻我的企业-员工名册）
+  if ((m = pathname.match(/^\/api\/users\/(\d+)$/)) && me.role === 'admin' && method === 'PUT') {
+    const id = Number(m[1]);
+    const u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+    if (!u) throw new HttpError(404, '用户不存在');
+    const b = await readBody(req);
+    if (b.dept_id !== undefined) db.prepare('UPDATE users SET dept_id=? WHERE id=?').run(b.dept_id ? Number(b.dept_id) : null, id);
+    if (b.role && ['admin', 'manager', 'sales'].includes(b.role)) db.prepare('UPDATE users SET role=? WHERE id=?').run(b.role, id);
+    audit(db, me.name, 'user_update', `user#${id}`, `dept=${b.dept_id ?? '-'} role=${b.role ?? '-'}`);
+    return sendJson(res, 200, { ok: true });
   }
   if ((m = pathname.match(/^\/api\/users\/(\d+)\/(disable|enable|resetpass)$/)) && me.role === 'admin' && method === 'POST') {
     const id = Number(m[1]);

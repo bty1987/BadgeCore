@@ -1,127 +1,304 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>沟通配置 · BadgeCore</title>
-<link rel="stylesheet" href="/style.css">
+<meta charset="UTF-8">
+<title>沟通配置 - BadgeCore 管理后台</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
 </head>
 <body>
-<div class="topbar">
-  <span class="brand">BadgeCore</span>
-  <nav>
-    <a href="/">沟通记录</a>
-    <a href="/customers.html">客户</a>
-    <a href="/dashboard.html">数据看板</a>
-    <a href="/ask.html">Ask AI</a>
-    <a href="/attendance.html">考勤</a>
-    <a href="/devices.html">设备</a>
-    <a href="/config.html" class="active">沟通配置</a>
-    <a href="/settings.html">设置</a>
-    <a href="/notifications.html">消息</a>
-  </nav>
-  <span class="spacer"></span><span class="who" id="who"></span>
-  <button onclick="location='/login.html'">退出</button>
-</div>
-<div class="wrap">
-  <div class="card">
-    <h2>沟通配置域（04 册九大域 + 知识库/案例库/风险预警）</h2>
-    <div class="tabs" id="tabs"></div>
-    <div class="muted" id="domain-help" style="margin-bottom:10px"></div>
-    <table id="tbl">
-      <thead><tr><th>启用</th><th>名称</th><th>内容</th><th style="width:150px">操作</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <details style="margin-top:14px">
-      <summary>＋ 新增条目</summary>
-      <div class="grid2" style="margin-top:10px">
-        <div><label>名称</label><input id="n-name"></div>
-        <div><label>排序（小在前）</label><input id="n-sort" type="number" value="0"></div>
-      </div>
-      <label>内容（JSON，按域结构填写）</label>
-      <textarea id="n-data">{}</textarea>
-      <div style="margin-top:10px"><button class="primary" onclick="create()">保存新增</button></div>
-    </details>
+<div id="top"></div>
+<div class="sidelayout">
+  <div id="side"></div>
+  <div class="main">
+    <div class="page-head">
+      <h1 id="d-title">沟通配置</h1>
+      <span class="spacer"></span>
+      <button class="btn" id="btn-import">导入</button>
+      <button class="btn primary" id="btn-new">＋ 新建</button>
+    </div>
+    <div id="d-help" style="color:var(--text-2);font-size:13px;margin:-8px 0 14px"></div>
+    <div id="tabs"></div>
+    <div class="card" style="padding:0" id="tbl"></div>
   </div>
 </div>
-<script>
-const $ = id => document.getElementById(id);
-const DOMAINS = {
-  info_fields:      { label: '信息收集',   help: 'data: {type:"文本|单选|多选|数字|日期", desc:"说明", examples:["采集问句示例"]}' },
-  deal_models:      { label: '成交模型',   help: 'data: {scene:"场景说明", items:["关键行为检查项", …]} → 意向度评分依据（ANA-05）' },
-  task_models:      { label: '任务模型',   help: 'data: {items:["任务项", …]} → 报告任务达成三态判定（ANA-06）' },
-  ability_models:   { label: '能力模型',   help: 'data: {items:[{name:"能力名", behavior:"行为表现定义"}]}' },
-  summary_templates:{ label: '沟通总结模板', help: 'data: {fields:["模板字段", …]}，按环节套用' },
-  analysis_dims:    { label: '分析维度',   help: 'data: {key:"summary|stance|competitors|intention|tasks|violations"} 控制报告启用维度' },
-  flows:            { label: '沟通流程',   help: 'data: {steps:["环节1","环节2", …]}' },
-  violations:       { label: '违规检测',   help: 'data: {trigger:"触发描述", typical:"典型话术示例（必填）", exemption:"非违规判定说明（必填，语义判活关键）"}' },
-  competitors:      { label: '竞争对手',   help: 'data: {products:["产品线"], notes:"优劣势素材"}，name 即竞品名（识别词典，入库自动告警提及）' },
-  knowledge_base:   { label: '知识库',     help: 'data: {content:"知识内容（FAQ/异议处理/商务政策…）"} → Ask AI 检索来源' },
-  case_library:     { label: '案例库',     help: 'data: {scenario:"适用场景", script:"金牌话术"} → Ask AI 检索来源' },
-  risk_rules:       { label: '风险预警',   help: 'data: {keywords:["风险词","回扣"], level:"high|mid"} → 新沟通命中关键词即自动告警（AI-09 规则层）' },
-  insight_categories:{ label: '洞察配置',   help: 'data: {desc:"分类说明"}，name 即洞察分类（品牌信任/商务报价/产品价值…，04 册洞察配置）' },
-  scheduled_reports:{ label: '定时报告',   help: 'data: {time:"08:30", question:"昨天竞品提及汇总", recipients:["admin"]} → 每日到点自动跑 Ask AI 并站内信推送（AI-11）' },
-};
-let domain = 'deal_models', ME = null;
 
-async function api(url, opts) {
-  const res = await fetch(url, opts);
-  if (res.status === 401) { location.href = '/login.html'; throw 0; }
-  return res;
-}
-async function init() {
-  const me = await (await api('/api/me')).json();
-  ME = me; $('who').textContent = `${me.name}（${me.role}）`;
-  if (me.role !== 'admin') { document.body.innerHTML = '<div class="wrap"><div class="card err">仅管理员可访问配置页。</div></div>'; return; }
-  $('tabs').innerHTML = Object.entries(DOMAINS).map(([k, v]) =>
-    `<button data-d="${k}" onclick="switchDomain('${k}')">${v.label}</button>`).join('');
-  switchDomain('deal_models');
+<script>
+/* ================= 域定义：对照 SaleSmart 各配置页截图 1:1 =================
+   columns: 表格列（对照截图列名与内容形态）；form: 新建/编辑弹窗字段 */
+const FIELDS = {
+  violations: { label: '违规检测', tabs: ['违规项', '违规模型'],
+    columns: [
+      { key: 'name', title: '违规项名称', w: '140px' },
+      { key: 'trigger', title: '触发描述', render: r => `<span style="color:var(--text-2)">${esc(r.data.trigger || '')}</span>` },
+      { key: 'typical', title: '典型话术', render: r => `<span style="color:var(--text-3);font-size:12.5px">${esc((r.data.typical || '').slice(0, 60))}${(r.data.typical || '').length > 60 ? '…' : ''}</span>` },
+      { key: 'updated_at', title: '更新时间', render: r => fmtTime(r.updated_at), w: '130px' },
+    ],
+    form: [
+      { key: 'name', label: '违规项名称', type: 'text', required: true, ph: '如：诱导仓促签约' },
+      { key: 'trigger', label: '触发描述', type: 'textarea', required: true, ph: '违规：设计师通过…（描述何种行为触发本违规项）' },
+      { key: 'typical', label: '典型话术示例', type: 'textarea', required: true, ph: '列出典型违规话术原文，供 AI 学习判别' },
+      { key: 'exemption', label: '非违规判定说明', type: 'textarea', required: true, help: '必填：说明哪些类似表达不算违规（语义判活的关键，避免误伤正常沟通）' },
+    ] },
+  deal_models: { label: '成交模型',
+    columns: [
+      { key: 'name', title: '模型名称', w: '160px' },
+      { key: 'enabled', title: '启用状态', render: r => `<span class="tag ${r.enabled ? 'on' : 'off'}">${r.enabled ? '已启用' : '已停用'}</span>`, w: '90px' },
+      { key: 'scene', title: '场景说明', render: r => `<span style="color:var(--text-2)">${esc(r.data.scene || '')}</span>` },
+      { key: 'items', title: '检查项', render: r => `<span class="tag info">${(r.data.items || []).length} 项</span>`, w: '80px' },
+    ],
+    form: [
+      { key: 'name', label: '模型名称', type: 'text', required: true, ph: '如：家装客户成交模型' },
+      { key: 'scene', label: '场景说明', type: 'textarea', ph: '描述该模型适用的业务场景' },
+      { key: 'items', label: '关键行为检查项（每行一项）', type: 'tags', ph: '如：\n明确客户装修预算\n确认房屋基本情况\n约定量房时间' },
+    ] },
+  task_models: { label: '任务模型',
+    columns: [
+      { key: 'name', title: '任务名称', w: '200px' },
+      { key: 'items', title: '任务项', render: r => `<span style="color:var(--text-2)">${(r.data.items || []).map(esc).join(' / ')}</span>` },
+      { key: 'updated_at', title: '创建时间', render: r => fmtTime(r.updated_at), w: '130px' },
+    ],
+    form: [
+      { key: 'name', label: '任务名称', type: 'text', required: true, ph: '如：首访标准动作' },
+      { key: 'items', label: '任务项（每行一项）', type: 'tags', required: true, ph: '如：\n自我介绍并递名片\n了解客户需求\n留客户联系方式' },
+    ] },
+  ability_models: { label: '能力模型',
+    columns: [
+      { key: 'name', title: '能力名称', w: '180px' },
+      { key: 'behavior', title: '行为表现', render: r => `<span style="color:var(--text-2)">${esc(r.data.behavior || '')}</span>` },
+      { key: 'updated_at', title: '创建时间', render: r => fmtTime(r.updated_at), w: '130px' },
+    ],
+    form: [
+      { key: 'name', label: '能力名称', type: 'text', required: true, ph: '如：需求挖掘能力' },
+      { key: 'behavior', label: '行为表现定义', type: 'textarea', required: true, ph: '描述优秀/不合格的具体行为表现，供 AI 对照评估' },
+    ] },
+  info_fields: { label: '信息收集',
+    columns: [
+      { key: 'name', title: '字段名称', w: '140px' },
+      { key: 'type', title: '字段类型', render: r => `<span class="tag info">${esc(r.data.type || '文本')}</span>`, w: '90px' },
+      { key: 'desc', title: '字段说明', render: r => `<span style="color:var(--text-2)">${esc(r.data.desc || '')}</span>` },
+      { key: 'examples', title: '采集问句示例', render: r => `<span style="color:var(--text-3);font-size:12.5px">${esc((r.data.examples || []).join('；'))}</span>` },
+    ],
+    form: [
+      { key: 'name', label: '字段名称', type: 'text', required: true, ph: '如：房屋概况' },
+      { key: 'type', label: '字段类型', type: 'select', options: ['文本', '单选', '多选', '数字', '日期'] },
+      { key: 'desc', label: '字段说明', type: 'textarea', ph: '了解客户房屋的基本信息，包括面积、户型、房龄、楼层等…' },
+      { key: 'examples', label: '采集问句示例（每行一问）', type: 'tags', ph: '如：\n您的房屋建筑面积是多少？几室几厅？\n房屋是哪一年建成的？' },
+    ] },
+  summary_templates: { label: '沟通总结',
+    columns: [
+      { key: 'name', title: '模板名称', w: '180px' },
+      { key: 'fields', title: '模板字段', render: r => `<span style="color:var(--text-2)">${(r.data.fields || []).map(esc).join(' / ')}</span>` },
+      { key: 'updated_at', title: '更新时间', render: r => fmtTime(r.updated_at), w: '130px' },
+    ],
+    form: [
+      { key: 'name', label: '模板名称', type: 'text', required: true, ph: '如：上门量房总结' },
+      { key: 'fields', label: '模板字段（每行一项）', type: 'tags', required: true, ph: '如：\n房屋概况\n居住痛点\n客户预算\n方案反馈' },
+    ] },
+  analysis_dims: { label: '沟通分析',
+    columns: [
+      { key: 'name', title: '维度名称', w: '180px' },
+      { key: 'builtin', title: '类型', render: r => `<span class="tag ${r.data.builtin ? 'off' : 'info'}">${r.data.builtin ? '系统内置' : '自定义'}</span>`, w: '90px' },
+      { key: 'enabled', title: '启用状态', render: r => `<span class="tag ${r.enabled ? 'on' : 'off'}">${r.enabled ? '已启用' : '已停用'}</span>`, w: '90px' },
+      { key: 'desc', title: '说明', render: r => `<span style="color:var(--text-2)">${esc(r.data.desc || '')}</span>` },
+    ],
+    form: [
+      { key: 'name', label: '维度名称', type: 'text', required: true, ph: '如：客户立场' },
+      { key: 'desc', label: '说明', type: 'textarea', ph: '该维度在报告中的产出说明' },
+    ] },
+  flows: { label: '沟通流程',
+    columns: [
+      { key: 'name', title: '流程名称', w: '180px' },
+      { key: 'steps', title: '沟通环节', render: r => (r.data.steps || []).map(s => `<span class="tag info" style="margin-right:4px">${esc(s)}</span>`).join('') },
+      { key: 'updated_at', title: '创建时间', render: r => fmtTime(r.updated_at), w: '130px' },
+    ],
+    form: [
+      { key: 'name', label: '流程名称', type: 'text', required: true, ph: '如：家装-通用流程' },
+      { key: 'steps', label: '沟通环节（按顺序，每行一项）', type: 'tags', required: true, ph: '如：\n走馆带展\n上门量房\n报价谈判\n方案沟通与报价谈判' },
+    ] },
+  competitors: { label: '竞争对手',
+    columns: [
+      { key: 'name', title: '竞品名称', w: '160px' },
+      { key: 'products', title: '产品线', render: r => `<span style="color:var(--text-2)">${(r.data.products || []).map(esc).join(' / ')}</span>` },
+      { key: 'notes', title: '优劣势素材', render: r => `<span style="color:var(--text-3);font-size:12.5px">${esc((r.data.notes || '').slice(0, 60))}</span>` },
+    ],
+    form: [
+      { key: 'name', label: '竞品名称', type: 'text', required: true, ph: '竞品公司或产品名（客户提及时自动识别）' },
+      { key: 'products', label: '产品线（每行一项）', type: 'tags' },
+      { key: 'notes', label: '优劣势素材', type: 'textarea', ph: '我方 vs 竞品的对比要点、应对策略素材' },
+    ] },
+  knowledge_base: { label: '知识库',
+    columns: [
+      { key: 'name', title: '知识类目', w: '200px' },
+      { key: 'content', title: '专题描述', render: r => `<span style="color:var(--text-2)">${esc((r.data.content || '').slice(0, 80))}</span>` },
+      { key: 'updated_at', title: '更新时间', render: r => fmtTime(r.updated_at), w: '130px' },
+    ],
+    form: [
+      { key: 'name', label: '知识类目', type: 'text', required: true, ph: '如：客户问答与异议处理' },
+      { key: 'content', label: '知识内容', type: 'textarea', required: true, ph: '标准答案、应对话术、谈判技巧、商务政策…（Ask AI 检索来源）' },
+    ] },
+  case_library: { label: '案例库',
+    columns: [
+      { key: 'name', title: '案例名称', w: '220px' },
+      { key: 'scenario', title: '适用场景', render: r => `<span class="tag info">${esc(r.data.scenario || '')}</span>`, w: '110px' },
+      { key: 'script', title: '金牌话术', render: r => `<span style="color:var(--text-2)">${esc((r.data.script || '').slice(0, 70))}…</span>` },
+    ],
+    form: [
+      { key: 'name', label: '案例名称', type: 'text', required: true, ph: '如：家装客户考察期精准转化案例' },
+      { key: 'scenario', label: '适用场景', type: 'text', ph: '如：期房考察阶段 / ToC / 大包模式' },
+      { key: 'script', label: '金牌话术内容', type: 'textarea', required: true, ph: '完整话术/案例复盘，供学习与 Ask AI 引用' },
+    ] },
+  risk_rules: { label: '风险预警',
+    columns: [
+      { key: 'name', title: '风险名称', w: '140px' },
+      { key: 'keywords', title: '识别条件', render: r => `<span style="color:var(--text-2)">沟通中提及：${(r.data.keywords || []).map(k => `<span class="tag danger" style="margin:0 3px">${esc(k)}</span>`).join('')}</span>` },
+      { key: 'level', title: '级别', render: r => `<span class="tag ${r.data.level === 'high' ? 'danger' : 'warn'}">${r.data.level === 'high' ? '高' : '中'}</span>`, w: '70px' },
+      { key: 'enabled', title: '状态', render: r => `<span class="tag ${r.enabled ? 'on' : 'off'}">${r.enabled ? '启用' : '禁用'}</span>`, w: '70px' },
+    ],
+    form: [
+      { key: 'name', label: '风险名称', type: 'text', required: true, ph: '如：私下交易引导' },
+      { key: 'keywords', label: '风险关键词（每行一项）', type: 'tags', required: true, ph: '如：\n私下\n回扣\n不走公司账' },
+      { key: 'level', label: '风险级别', type: 'select', options: ['high', 'mid'], optionLabels: ['高', '中'] },
+    ] },
+  insight_categories: { label: '洞察分类',
+    columns: [
+      { key: 'name', title: '洞察分类', w: '180px' },
+      { key: 'desc', title: '分类说明', render: r => `<span style="color:var(--text-2)">${esc(r.data.desc || '')}</span>` },
+    ],
+    form: [
+      { key: 'name', label: '分类名称', type: 'text', required: true, ph: '如：品牌信任 / 商务报价 / 产品价值' },
+      { key: 'desc', label: '分类说明', type: 'textarea', ph: '该洞察维度关注的沟通内容' },
+    ] },
+  scheduled_reports: { label: '定时报告',
+    columns: [
+      { key: 'name', title: '任务名称', w: '200px' },
+      { key: 'time', title: '推送时间', render: r => `<span class="tag info">${esc(r.data.time || '')}</span>`, w: '90px' },
+      { key: 'question', title: '报告内容（自然语言）', render: r => `<span style="color:var(--text-2)">${esc(r.data.question || '')}</span>` },
+      { key: 'enabled', title: '状态', render: r => `<span class="tag ${r.enabled ? 'on' : 'off'}">${r.enabled ? '启用' : '停用'}</span>`, w: '70px' },
+    ],
+    form: [
+      { key: 'name', label: '任务名称', type: 'text', required: true, ph: '如：每日竞品提及晨报' },
+      { key: 'time', label: '推送时间', type: 'text', required: true, ph: 'HH:MM，如 08:30' },
+      { key: 'question', label: '报告内容描述', type: 'textarea', required: true, ph: '数据时间范围直接写在描述里由 AI 解析，如：昨天所有沟通中客户提及竞品的汇总' },
+    ] },
+};
+
+/* ================= 应用 ================= */
+let domain = new URLSearchParams(location.search).get('domain') || 'violations';
+let CURRENT_TAB = 0;
+
+function init() {
+  if (!FIELDS[domain]) domain = 'violations';
+  document.getElementById('top').innerHTML = adminTopbar('admin');
+  document.getElementById('side').innerHTML = adminSidebar(domain);
+  loadMe();
+  renderDomain();
 }
 function switchDomain(d) {
-  domain = d;
-  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.d === d));
-  $('domain-help').textContent = DOMAINS[d].help;
+  domain = d; CURRENT_TAB = 0;
+  history.replaceState(null, '', `/config.html?domain=${d}`);
+  renderDomain();
+}
+function renderDomain() {
+  const F = FIELDS[domain];
+  document.getElementById('side').innerHTML = adminSidebar(domain);
+  document.getElementById('d-title').textContent = F.label;
+  const tabsEl = document.getElementById('tabs');
+  if (F.tabs) {
+    tabsEl.innerHTML = `<div class="tabbar">${F.tabs.map((t, i) =>
+      `<a class="${i === CURRENT_TAB ? 'active' : ''}" onclick="CURRENT_TAB=${i};load()">${t}</a>`).join('')}</div>`;
+  } else tabsEl.innerHTML = '';
   load();
 }
 async function load() {
-  const rows = await (await api(`/api/config/${domain}`)).json();
-  $('tbl').querySelector('tbody').innerHTML = rows.map(r => `
-    <tr>
-      <td><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggle(${r.id}, this.checked)"></td>
-      <td contenteditable id="name-${r.id}" onblur="save(${r.id})">${esc(r.name)}</td>
-      <td><textarea style="min-height:60px" id="data-${r.id}" onblur="save(${r.id})">${esc(JSON.stringify(r.data, null, 1))}</textarea></td>
-      <td><button onclick="save(${r.id})">保存</button> <button class="danger" onclick="del(${r.id})">删除</button></td>
-    </tr>`).join('') || '<tr><td colspan="4" class="muted" style="padding:14px">本域暂无条目，展开下方「新增条目」添加。</td></tr>';
+  const F = FIELDS[domain];
+  document.getElementById('d-help').textContent = `本页配置 ${F.label} 相关条目，新建后立即对新增沟通生效（04 册 ADM-01x）。`;
+  const rows = await api(`/api/config/${domain}`);
+  renderTable(document.getElementById('tbl'),
+    F.columns, rows,
+    (r) => `<a onclick='editDlg(${JSON.stringify(r.id)})'>编辑</a><a style="color:var(--danger)" onclick='del(${r.id})'>删除</a>`);
 }
-function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-async function save(id) {
-  const name = $(`name-${id}`).textContent.trim();
-  let data; try { data = JSON.parse($(`data-${id}`).value); } catch { alert('JSON 格式有误，未保存'); return; }
-  const enabled = true; // 启用状态由 checkbox 单独管理
-  await api(`/api/config/${domain}/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, data, enabled }) });
-  flash('已保存');
+function collectForm(fields) {
+  const body = { name: '', data: {}, enabled: true };
+  for (const f of fields) {
+    const el = document.getElementById('_f_' + f.key);
+    let v = (el.value || '').trim();
+    if (f.required && !v) { toast(`请填写「${f.label}」`); el.focus(); throw 0; }
+    if (f.type === 'tags') {
+      const arr = v.split('\n').map(s => s.trim()).filter(Boolean);
+      if (f.required && !arr.length) { toast(`请填写「${f.label}」`); throw 0; }
+      body.data[f.key] = arr;
+    } else if (f.type === 'select') {
+      body.data[f.key] = v;
+      if (f.options && f.optionLabels) body.data[f.key + '_label'] = f.optionLabels[f.options.indexOf(v)] ?? v;
+    } else body.data[f.key] = v;
+    if (f.key === 'name') body.name = v;
+  }
+  return body;
 }
-async function toggle(id, enabled) {
-  const name = $(`name-${id}`).textContent.trim();
-  let data; try { data = JSON.parse($(`data-${id}`).value); } catch { data = {}; }
-  await api(`/api/config/${domain}/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, data, enabled }) });
-  flash(enabled ? '已启用' : '已停用');
+function formHtml(fields, item) {
+  return fields.map(f => {
+    const cur = item ? (f.key === 'name' ? item.name : (item.data[f.key] ?? '')) : '';
+    const val = Array.isArray(cur) ? cur.join('\n') : cur;
+    const req = f.required ? '<b>*</b> ' : '';
+    let input;
+    if (f.type === 'textarea' || f.type === 'tags')
+      input = `<textarea id="_f_${f.key}" rows="${f.type === 'tags' ? 5 : 4}" placeholder="${esc(f.ph || '')}">${esc(val)}</textarea>`;
+    else if (f.type === 'select')
+      input = `<select id="_f_${f.key}">${(f.options || []).map((o, i) =>
+        `<option value="${o}" ${o === val ? 'selected' : ''}>${(f.optionLabels && f.optionLabels[i]) || o}</option>`).join('')}</select>`;
+    else input = `<input type="text" id="_f_${f.key}" value="${esc(val)}" placeholder="${esc(f.ph || '')}">`;
+    return `<div class="form-item"><label>${req}${f.label}</label>${input}${f.help ? `<div style="font-size:12px;color:var(--text-3);margin-top:4px">${f.help}</div>` : ''}</div>`;
+  }).join('');
+}
+function newDlg() {
+  const F = FIELDS[domain];
+  dlg().open({
+    title: '新建 · ' + F.label,
+    body: formHtml(F.form, null),
+    foot: [
+      { label: '取 消', onClick: d => d.close() },
+      { label: '确 定', cls: 'primary', onClick: async d => {
+          let body; try { body = collectForm(F.form); } catch { return; }
+          await api(`/api/config/${domain}`, { method: 'POST', body });
+          d.close(); toast('创建成功'); load();
+        } },
+    ],
+  });
+}
+async function editDlg(id) {
+  const F = FIELDS[domain];
+  const rows = await api(`/api/config/${domain}`);
+  const item = rows.find(r => r.id === id);
+  if (!item) return;
+  dlg().open({
+    title: '编辑 · ' + F.label,
+    body: formHtml(F.form, item),
+    foot: [
+      { label: '取 消', onClick: d => d.close() },
+      { label: '保存', cls: 'primary', onClick: async d => {
+          let body; try { body = collectForm(F.form); } catch { return; }
+          await api(`/api/config/${domain}/${id}`, { method: 'PUT', body });
+          d.close(); toast('已保存'); load();
+        } },
+    ],
+  });
 }
 async function del(id) {
-  if (!confirm('确认删除该条目？')) return;
-  await api(`/api/config/${domain}/${id}`, { method: 'DELETE' }); load();
+  dlg().open({
+    title: '删除确认',
+    body: '<div style="color:var(--text-2)">删除后不可恢复，确定删除该条目？</div>',
+    foot: [
+      { label: '取 消', onClick: d => d.close() },
+      { label: '删 除', cls: 'danger', onClick: async d => {
+          await api(`/api/config/${domain}/${id}`, { method: 'DELETE' });
+          d.close(); toast('已删除'); load();
+        } },
+    ],
+  });
 }
-async function create() {
-  let data; try { data = JSON.parse($('n-data').value); } catch { alert('JSON 格式有误'); return; }
-  await api(`/api/config/${domain}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: $('n-name').value, data, sort: Number($('n-sort').value) || 0 }) });
-  $('n-name').value = ''; $('n-data').value = '{}'; load(); flash('已新增');
-}
-let flashTimer;
-function flash(t) {
-  let el = $('flash'); if (!el) { el = document.createElement('div'); el.id = 'flash'; el.className = 'muted ok'; $('tabs').after(el); }
-  el.textContent = '✓ ' + t; clearTimeout(flashTimer); flashTimer = setTimeout(() => el.textContent = '', 1500);
-}
+document.getElementById('btn-new').onclick = newDlg;
+document.getElementById('btn-import').onclick = () => toast('导入：请将条目整理为 JSON 后联系管理员批量导入（后续版本支持 Excel）');
 init();
 </script>
 </body>

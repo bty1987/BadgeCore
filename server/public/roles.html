@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>角色权限 - BadgeCore 管理后台</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
+<style>
+  .perm-grid { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .perm-side { background: #f9fafb; border-right: 1px solid var(--border); padding: 12px; }
+  .perm-side .role { padding: 10px 12px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
+  .perm-side .role:hover { background: #eef0f3; }
+  .perm-side .role.sel { background: var(--primary-light); color: var(--primary); font-weight: 600; }
+  .perm-side .role .lv { font-size: 11px; color: var(--text-3); margin-left: 6px; }
+  .perm-main { padding: 16px 20px; }
+  .perm-main h2 { font-size: 16px; margin-bottom: 4px; }
+  .perm-main .meta { color: var(--text-2); font-size: 12.5px; margin-bottom: 14px; }
+  table.perm { width: 100%; border-collapse: collapse; }
+  table.perm th { text-align: left; padding: 9px 12px; background: #f9fafb; font-weight: 500; color: var(--text-2); font-size: 12.5px; border-bottom: 1px solid var(--border); }
+  table.perm td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; font-size: 13px; }
+  table.perm td:first-child { padding-left: 0; }
+  .indent { padding-left: 26px; color: var(--text-2); }
+</style>
+</head>
+<body>
+<div id="top"></div>
+<div class="sidelayout">
+  <div id="side"></div>
+  <div class="main">
+    <div class="page-head"><h1>角色权限</h1>
+      <span style="color:var(--text-2);font-size:13px">角色 × 导航 × 操作 × 数据范围（04 册 ADM-312 权限树模型）</span></div>
+    <div class="perm-grid">
+      <div class="perm-side" id="role-list"></div>
+      <div class="perm-main" id="role-detail"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* 内部版角色体系（D11 范围修正：企业内部使用，固定三角色 + 权限矩阵说明）
+   数据范围对齐 03 册 REC-25 / 04 册 ADM-313 */
+const ROLES = [
+  { key: 'admin', name: '平台管理员', level: 1, desc: '全部配置、用户、审计与全企业数据',
+    perms: [
+      ['销售助手', '', ''],
+      ['├ 沟通记录', '查看/删除/导出/重跑分析', '全企业'],
+      ['├ 客户管理', '增删改查/导入/分配负责人', '全企业'],
+      ['├ 数据看板', '全团队视角', '全企业'],
+      ['我的企业', '', ''],
+      ['├ 组织架构/员工名册', '增删改/启停/重置密码', '全企业'],
+      ['├ 沟通配置九大域', '全部 CRUD + 启停', '全企业'],
+      ['├ 全局配置', 'LLM/ASR/留存/脱敏/热词', '全企业'],
+      ['├ 设备管理', '台账/绑定/日志', '全企业'],
+      ['├ 角色权限', '查看矩阵', '全企业'],
+      ['├ 审计日志', '查看/导出', '全企业'],
+    ] },
+  { key: 'manager', name: '管理者', level: 2, desc: '本部门及子部门的沟通数据（只读团队视图 + 管理动作）',
+    perms: [
+      ['销售助手', '', ''],
+      ['├ 沟通记录', '查看/导出（团队视图只读）', '本部门及子部门'],
+      ['├ 客户管理', '查看/编辑本部门名下', '本部门及子部门'],
+      ['├ 数据看板', '团队视角', '本部门及子部门'],
+      ['├ 风险预警', '接收并处置本部门预警', '本部门及子部门'],
+      ['我的企业', '', ''],
+      ['├ 组织架构', '只读', '本部门'],
+      ['├ 设备管理', '台账/绑定', '本部门'],
+    ] },
+  { key: 'sales', name: '销售', level: 3, desc: '仅本人数据（REC-25 最小可见）',
+    perms: [
+      ['销售助手', '', ''],
+      ['├ 沟通记录', '查看本人/删除本人', '仅本人'],
+      ['├ 客户管理', '本人名下客户', '仅本人'],
+      ['├ 沟通计划', '本人计划', '仅本人'],
+      ['├ Ask AI', '按数据范围受控问答', '仅本人'],
+      ['我的企业', '', ''],
+      ['├ 个人设置', '改密/个人信息', '仅本人'],
+    ] },
+];
+let SEL = 'admin';
+function init() {
+  document.getElementById('top').innerHTML = adminTopbar('admin');
+  document.getElementById('side').innerHTML = adminSidebar('');
+  loadMe();
+  render();
+}
+function render() {
+  document.getElementById('role-list').innerHTML = ROLES.map(r =>
+    `<div class="role ${r.key === SEL ? 'sel' : ''}" onclick="SEL='${r.key}';render()">
+      ${r.name}<span class="lv">${r.level} 级</span></div>`).join('');
+  const r = ROLES.find(x => x.key === SEL);
+  const nUsers = USERS_COUNT[r.key] || 0;
+  document.getElementById('role-detail').innerHTML = `
+    <h2>${r.name}</h2>
+    <div class="meta">角色人数 <b>${nUsers}</b> 人 ｜ ${r.desc}</div>
+    <table class="perm">
+      <thead><tr><th style="width:240px">导航</th><th>操作权限</th><th style="width:170px">数据范围</th></tr></thead>
+      <tbody>${r.perms.map(([nav, op, scope]) => `<tr>
+        <td class="${nav.startsWith('├') ? 'indent' : ''}"><b style="font-weight:${nav.startsWith('├') ? 400 : 600}">${nav}</b></td>
+        <td>${op || '<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${scope ? `<span class="tag info">${scope}</span>` : ''}</td></tr>`).join('')}</tbody>
+    </table>`;
+}
+let USERS_COUNT = {};
+(async () => {
+  try { const us = await api('/api/users'); USERS_COUNT = us.reduce((m, u) => (m[u.role] = (m[u.role] || 0) + 1, m), {}); } catch {}
+  init();
+})();
+</script>
+</body>
+</html>
