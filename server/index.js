@@ -311,6 +311,7 @@ class HttpError extends Error {
 
 // ---------- 路由 ----------
 async function handleApi(req, res, url) {
+  let m; // 路由匹配复用（须在所有用到它的端点之前声明）
   const { pathname } = url;
   const method = req.method;
 
@@ -390,6 +391,25 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { id });
   }
 
+  // receiver 回填说话人分离转写（lfasr 完成后），并按配置重跑分析（令牌鉴权）
+  if ((m = pathname.match(/^\/api\/communications\/(\d+)\/transcript$/)) && method === 'PUT') {
+    const expect = getSetting(db, 'ingest_token');
+    if (!expect || req.headers['x-ingest-token'] !== expect) throw new HttpError(401, '入库令牌无效');
+    const b = await readBody(req);
+    const id = Number(m[1]);
+    if (!db.prepare('SELECT id FROM communications WHERE id=?').get(id)) throw new HttpError(404, '记录不存在');
+    const spkText = redactText(String(b.transcript || ''));
+    if (!spkText) throw new HttpError(400, 'transcript 为空');
+    db.prepare('UPDATE communications SET transcript=?, status=? WHERE id=?').run(spkText, 'transcribed', id);
+    audit(db, 'receiver', 'transcript_update', `comm#${id}`, `${spkText.length} 字（说话人分离回填）`);
+    const llm = getSetting(db, 'llm');
+    let analyzed = false;
+    if (llm.auto) {
+      try { await runAnalysis(id, 'lfasr'); analyzed = true; } catch { /* 保留转写，分析状态已置 failed */ }
+    }
+    return sendJson(res, 200, { ok: true, analyzed });
+  }
+
   // 以下端点需登录
   const me = currentUser(req);
   if (!me) throw new HttpError(401, '未登录');
@@ -401,7 +421,6 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/me') return sendJson(res, 200, { name: me.name, role: me.role });
 
   // 沟通记录（数据范围受全局配置 view_scope 影响，ADM-202/313）
-  let m;
   const myScope = () => {
     const owners = visibleOwners(me);
     if (!owners) return { sql: '', params: [] };

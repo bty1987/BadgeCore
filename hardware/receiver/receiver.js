@@ -14,6 +14,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 const { buildOggOpus } = require('./ogg-writer');
 const { loadConfig: loadXfConfig } = require('./xfyun-iat');
@@ -164,6 +165,7 @@ wss.on('connection', (ws, req) => {
   function ingestToServer(transcript) {
     const base = process.env.BADGE_SERVER;
     if (!base || frameCount === 0 || !oggPath) return;
+    const lfasrOn = XF_CONFIG && process.env.BADGE_LFASR !== 'off';
     fetch(base.replace(/\/$/, '') + '/api/ingest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': process.env.BADGE_TOKEN || '' },
@@ -178,9 +180,37 @@ wss.on('connection', (ws, req) => {
       }),
       signal: AbortSignal.timeout(8000),
     }).then(r => r.json()).then(d => {
-      if (d.id) console.log(`[API] 已入库后台 comm#${d.id}${d.analyzed ? '（自动分析完成）' : ''}`);
-      else console.log(`[API] 入库被拒: ${d.error || JSON.stringify(d)}`);
+      if (d.id) {
+        console.log(`[API] 已入库后台 comm#${d.id}${d.analyzed ? '（自动分析完成）' : ''}`);
+        if (lfasrOn) runSpeakerDiarization(d.id, oggPath);
+      } else {
+        console.log(`[API] 入库被拒: ${d.error || JSON.stringify(d)}`);
+      }
     }).catch(e => console.log(`[API] 入库失败: ${e.message}`));
+  }
+
+  // 入库后异步跑说话人分离（讯飞语音转写 lfasr，可能需数分钟）；成功回填后台并自动重出报告。
+  // 服务未开通/排队超时则静默失败，保留听写单人流文本（BADGE_LFASR=off 可关闭）。
+  function runSpeakerDiarization(commId, oggFile) {
+    console.log(`[SPK] comm#${commId} 提交说话人分离（异步）…`);
+    const child = spawn(process.execPath, [path.join(__dirname, 'asr-xf-transcribe.js'), oggFile], { stdio: 'ignore' });
+    child.on('exit', code => {
+      const spkFile = oggFile + '.spk.txt';
+      if (code !== 0 || !fs.existsSync(spkFile)) {
+        return console.log(`[SPK] comm#${commId} 分离未完成（语音转写服务未开通或排队超时），保留听写文本`);
+      }
+      const spkText = fs.readFileSync(spkFile, 'utf8');
+      const base = process.env.BADGE_SERVER;
+      if (!base) return;
+      fetch(base.replace(/\/$/, '') + `/api/communications/${commId}/transcript`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': process.env.BADGE_TOKEN || '' },
+        body: JSON.stringify({ transcript: spkText }),
+        signal: AbortSignal.timeout(120_000),
+      }).then(r => r.json()).then(d => {
+        console.log(`[SPK] comm#${commId} ${d.ok ? `说话人转写已回填${d.analyzed ? '，报告已按角色重出' : ''}` : '回填失败: ' + (d.error || '?')}`);
+      }).catch(e => console.log(`[SPK] comm#${commId} 回填异常: ${e.message}`));
+    });
   }
   ws.on('error', (e) => console.log(`[WS ] 错误: ${e.message}`));
 });

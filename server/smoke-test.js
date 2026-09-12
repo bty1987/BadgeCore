@@ -293,6 +293,21 @@ async function waitReady(child) {
     check('看板权限：sales 403', r.status === 403);
     cookie = adminCookie2;
 
+    // 10.8 lfasr 说话人分离回填端点（receiver 用）
+    r = await fetch(BASE + `/api/communications/${ingestData.id}/transcript`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({ transcript: '说话人1 [00:01] 您好欢迎光临。\n说话人2 [00:05] 我想了解下价格，手机号13900002222。' }),
+    });
+    const fill = await r.json();
+    check('lfasr 回填转写并重出分析', r.status === 200 && fill.ok === true && fill.analyzed === true);
+    r = await api('GET', `/api/communications/${ingestData.id}`);
+    check('回填文本含说话人标签且脱敏（CMP-07）', (r.data?.transcript || '').includes('说话人2') && (r.data?.transcript || '').includes('139****2222'));
+    const badFill = await fetch(BASE + `/api/communications/${ingestData.id}/transcript`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': 'wrong' },
+      body: JSON.stringify({ transcript: 'x' }),
+    });
+    check('回填端点令牌鉴权', badFill.status === 401);
+
     // 11. 审计
     r = await api('GET', '/api/audit');
     check('审计日志有记录', (r.data || []).some(a => a.action === 'login' && a.user === 'admin'));
