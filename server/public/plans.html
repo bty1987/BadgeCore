@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>沟通计划 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  const main = mountAppShell('comm', me.name);
+  main.innerHTML = `
+    <div class="page-head"><h1>沟通计划</h1><span class="spacer"></span>
+      <button class="btn primary" onclick="planDlg()">＋ 安排沟通</button></div>
+    <div class="card" style="padding:0" id="tbl"></div>`;
+  const [rows, custs] = await Promise.all([api('/api/plans'), api('/api/customers').catch(() => [])]);
+  renderTable(document.getElementById('tbl'), [
+    { key: 'title', title: '计划主题', render: r => `<b>${esc(r.title)}</b>` },
+    { key: 'customer_name', title: '客户', render: r => esc(r.customer_name || '-') },
+    { key: 'owner', title: '负责人', w: '90px', render: r => esc(r.owner || '-') },
+    { key: 'plan_at', title: '计划时间', w: '140px', render: r => fmtTime(r.plan_at) },
+    { key: 'flow', title: '沟通流程', w: '120px', render: r => `<span class="tag info">${esc(r.flow || '通用')}</span>` },
+    { key: 'status', title: '状态', w: '80px', render: r => `<span class="tag ${r.status === 'done' ? 'on' : 'warn'}">${r.status === 'done' ? '已完成' : '待进行'}</span>` },
+  ], rows, r => r.status !== 'done' ? `<a onclick="done(${r.id})">标记完成</a>` : '');
+  window.done = async function (id) {
+    await api(`/api/plans/${id}/complete`, { method: 'POST' }); toast('已完成'); location.reload();
+  };
+  window.planDlg = function () {
+    dlg().open({
+      title: '安排沟通',
+      body: `
+        <div class="form-item"><label><b>*</b> 计划主题</label><input id="_p_title" placeholder="如：XX客户上门量房"></div>
+        <div class="form-item"><label>客户</label><select id="_p_cust"><option value="">（不关联）</option>
+          ${custs.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+        <div class="form-item"><label>计划时间</label><input id="_p_time" type="datetime-local"></div>
+        <div class="form-item"><label>沟通流程</label><input id="_p_flow" placeholder="如：家装-通用流程"></div>`,
+      foot: [{ label: '取 消', onClick: d => d.close() }, { label: '确 定', cls: 'primary', onClick: async d => {
+        const title = document.getElementById('_p_title').value.trim();
+        if (!title) { toast('请填写主题'); return; }
+        await api('/api/plans', { method: 'POST', body: {
+          title, customer_id: document.getElementById('_p_cust').value || null,
+          plan_at: document.getElementById('_p_time').value, flow: document.getElementById('_p_flow').value } });
+        d.close(); toast('已创建'); location.reload();
+      } }],
+    });
+  };
+})();
+</script>
+</body>
+</html>

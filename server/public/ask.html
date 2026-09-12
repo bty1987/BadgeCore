@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ask AI · BadgeCore</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
 <style>
 .qa { border-bottom: 1px solid #f0f1f3; padding: 14px 0; }
 .qa .q { font-weight: 600; margin-bottom: 8px; }
@@ -14,22 +16,10 @@
 </style>
 </head>
 <body>
-<div class="topbar">
-  <span class="brand">BadgeCore</span>
-  <nav>
-    <a href="/">沟通记录</a>
-    <a href="/customers.html">客户</a>
-    <a href="/dashboard.html">数据看板</a>
-    <a href="/ask.html" class="active">Ask AI</a>
-    <a href="/attendance.html">考勤</a>
-    <a href="/devices.html">设备</a>
-    <a href="/config.html">沟通配置</a>
-    <a href="/settings.html">设置</a>
-    <a href="/notifications.html">消息</a>
-  </nav>
-  <span class="spacer"></span><span class="who" id="who"></span>
-  <button onclick="location='/login.html'">退出</button>
-</div>
+<div id="top"></div>
+<div class="sidelayout">
+<div id="side"></div>
+<div class="main" style="padding-top:20px">
 <div class="wrap">
   <div class="card">
     <h2>Ask AI（双视角问答 · 数据范围内检索）</h2>
@@ -57,10 +47,9 @@ async function api(url, opts) {
   if (res.status === 401) { location.href = '/login.html'; throw 0; }
   return res;
 }
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function init() {
   const me = await (await api('/api/me')).json();
-  $('who').textContent = `${me.name}（${me.role}）`;
+  { const w = document.getElementById('who'); if (w) w.textContent = `${me.name}（${me.role}）`; }
 }
 async function ask() {
   const question = $('q').value.trim();
@@ -93,7 +82,14 @@ async function prepVisit() {
     <h3>准备问题清单</h3><ul class="plain">${(p.questions || []).map(q => `<li>${esc(q)}</li>`).join('') || '<li class="muted">无</li>'}</ul>
     <div class="footnote">以上内容由 AI 生成，仅供参考。</div>`;
 }
+async function init() {
+  document.getElementById('top').innerHTML = adminTopbar('admin');
+  document.getElementById('side').innerHTML = adminSidebar('ask');
+  const me = await (await api('/api/me')).json();
+  { const w = document.getElementById('who'); if (w) w.textContent = `${me.name}（${me.role}）`; }
+}
 init();
 </script>
+</div></div>
 </body>
 </html>

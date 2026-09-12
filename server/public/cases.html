@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>案例库 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  const main = mountAppShell('cases', me.name);
+  main.innerHTML = `
+    <div class="page-head"><h1>案例库</h1>
+      <span style="color:var(--text-2);font-size:13px">优秀客户案例 · 金牌话术（Ask AI 检索来源）</span>
+      <span class="spacer"></span>${me.role === 'admin' ? '<button class="btn primary" onclick="caseDlg()">＋ 新建案例</button>' : ''}</div>
+    <div id="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px">加载中…</div>`;
+  const rows = await api('/api/config/case_library');
+  document.getElementById('grid').innerHTML = rows.length ? rows.map(r => `
+    <div class="card" style="cursor:default">
+      <div style="font-weight:600;margin-bottom:8px">${esc(r.name)}</div>
+      <div style="margin-bottom:8px">${r.data.scenario ? `<span class="tag info">${esc(r.data.scenario)}</span>` : ''}${r.enabled ? '' : ' <span class="tag off">已停用</span>'}</div>
+      <div style="color:var(--text-2);font-size:13px;line-height:1.8;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden">${esc(r.data.script || '')}</div>
+      ${me.role === 'admin' ? `<div style="margin-top:10px"><a onclick='caseDlg(${JSON.stringify(r)})'>编辑</a> <a style="color:var(--danger)" onclick="delCase(${r.id})">删除</a></div>` : ''}
+    </div>`).join('') : '<div class="card empty" style="grid-column:1/-1"><div class="icon">📚</div>暂无案例，管理员可在管理后台-案例库新建</div>';
+  window.caseDlg = function (item) {
+    item = item || {};
+    dlg().open({
+      title: item.id ? '编辑案例' : '新建案例',
+      body: `
+        <div class="form-item"><label><b>*</b> 案例名称</label><input id="_k_name" value="${esc(item.name || '')}"></div>
+        <div class="form-item"><label>适用场景</label><input id="_k_scene" value="${esc(item.data?.scenario || '')}"></div>
+        <div class="form-item"><label><b>*</b> 金牌话术内容</label><textarea id="_k_script" rows="6">${esc(item.data?.script || '')}</textarea></div>`,
+      foot: [{ label: '取 消', onClick: d => d.close() }, { label: '保 存', cls: 'primary', onClick: async d => {
+        const name = document.getElementById('_k_name').value.trim();
+        const script = document.getElementById('_k_script').value.trim();
+        if (!name || !script) { toast('请填写名称和话术'); return; }
+        const body = { name, data: { scenario: document.getElementById('_k_scene').value, script } };
+        if (item.id) await api('/api/config/case_library/' + item.id, { method: 'PUT', body });
+        else await api('/api/config/case_library', { method: 'POST', body });
+        d.close(); toast('已保存'); location.reload();
+      } }],
+    });
+  };
+  window.delCase = async function (id) {
+    if (!confirm('确定删除该案例？')) return;
+    await api('/api/config/case_library/' + id, { method: 'DELETE' }); toast('已删除'); location.reload();
+  };
+})();
+</script>
+</body>
+</html>

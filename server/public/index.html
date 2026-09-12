@@ -1,157 +1,70 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>沟通记录 · BadgeCore</title>
-<link rel="stylesheet" href="/style.css">
+<meta charset="UTF-8">
+<title>首页 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
 </head>
 <body>
-<div class="topbar">
-  <span class="brand">BadgeCore</span>
-  <nav>
-    <a href="/" class="active">沟通记录</a>
-    <a href="/ask.html">Ask AI</a>
-    <a href="/customers.html">客户</a>
-    <a href="/dashboard.html">数据看板</a>
-    <a href="/attendance.html">考勤</a>
-    <a href="/devices.html">设备</a>
-    <a href="/config.html">沟通配置</a>
-    <a href="/settings.html">设置</a>
-    <a href="/notifications.html">消息</a>
-  </nav>
-  <span class="spacer"></span><span class="who" id="who"></span>
-  <button onclick="logout()">退出</button>
-</div>
-<div class="wrap">
-  <div class="card">
-    <div class="grid2" style="align-items:end">
-      <div>
-        <label>搜索（主题/转写内容）</label>
-        <input id="q" placeholder="关键词…" onkeydown="if(event.key==='Enter')load()">
-      </div>
-      <div>
-        <label>状态</label>
-        <select id="status" onchange="load()">
-          <option value="">全部</option>
-          <option value="recorded">已录制</option>
-          <option value="transcribed">已转写</option>
-          <option value="analyzing">分析中</option>
-          <option value="analyzed">已分析</option>
-          <option value="failed">失败</option>
-        </select>
-      </div>
-    </div>
-  </div>
-  <div class="card">
-    <table id="tbl">
-      <thead><tr><th>#</th><th>时间</th><th>主题</th><th>时长</th><th>意向</th><th>状态</th><th>归属</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="muted" id="empty" style="padding:16px;display:none">
-      暂无记录——设备录音会话结束后由 receiver 自动入库；也可在设置页查看入库令牌手动推送。
-    </div>
-  </div>
-</div>
-
-<div class="drawer" id="drawer">
-  <button onclick="drawer.classList.remove('open')" style="float:right">✕ 关闭</button>
-  <h2 id="d-title"></h2>
-  <div class="muted" id="d-meta"></div>
-  <div id="d-actions" style="margin:12px 0"></div>
-  <div id="d-report"></div>
-  <h3>转写全文</h3>
-  <div class="transcript" id="d-transcript"></div>
-</div>
-
 <script>
-const $ = id => document.getElementById(id);
-let ME = null;
-const drawer = $('drawer');
-
-async function api(url, opts) {
-  const res = await fetch(url, opts);
-  if (res.status === 401) { location.href = '/login.html'; throw new Error('未登录'); }
-  return res;
-}
-
-async function init() {
-  const me = await (await api('/api/me')).json();
-  ME = me; $('who').textContent = `${me.name}（${roleName(me.role)}）`;
-  await load();
-}
-
-function roleName(r) { return { admin: '管理员', manager: '经理', sales: '销售' }[r] || r; }
-function fmtTime(iso) { return (iso || '').replace('T', ' ').slice(0, 16); }
-function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-
-async function load() {
-  const q = encodeURIComponent($('q').value), status = $('status').value;
-  const rows = await (await api(`/api/communications?q=${q}&status=${status}`)).json();
-  const tb = $('tbl').querySelector('tbody');
-  tb.innerHTML = rows.map(r => `
-    <tr class="rowlink" onclick="detail(${r.id})">
-      <td>${r.id}</td><td>${fmtTime(r.created_at)}</td><td>${esc(r.topic) || '(未命名)'}</td>
-      <td>${r.duration_s ? r.duration_s.toFixed(0) + 's' : '-'}</td>
-      <td>${r.intention ? `<span class="badge ${r.intention.level === '高' ? 'high' : r.intention.level === '中' ? 'mid' : 'low'}">${r.intention.level} ${r.intention.score}</span>` : '-'}</td>
-      <td><span class="badge ${r.status}">${{recorded:'已录制',transcribed:'已转写',analyzing:'分析中',analyzed:'已分析',failed:'失败'}[r.status] || r.status}</span></td>
-      <td>${esc(r.owner) || '-'}</td>
-    </tr>`).join('');
-  $('empty').style.display = rows.length ? 'none' : 'block';
-}
-
-async function detail(id) {
-  const r = await (await api(`/api/communications/${id}`)).json();
-  $('d-title').textContent = `#${r.id} ${r.topic || '(未命名沟通)'}`;
-  $('d-meta').textContent = `${fmtTime(r.created_at)} · ${r.duration_s.toFixed(0)}s · 归属 ${r.owner || '-'} · 客户 ${r.customer?.name || '（未关联）'} · ${r.meta?.device || ''}`;
-  $('d-actions').innerHTML = `
-    ${(r.meta?.alerts || []).map(a => `<span class="badge ${a.level === 'high' ? 'high' : 'mid'}" title="${esc(a.rule || '')}">${a.type === 'competitor' ? '竞品提及' : '风险词'}·${esc(a.word)}</span>`).join(' ')}
-    <button class="primary" onclick="analyze(${id})">${r.report ? '重新分析' : '生成分析报告'}</button>
-    <button onclick="window.open('/api/communications/${id}/export')">导出（水印+审计）</button>`;
-  renderReport(r.report);
-  $('d-transcript').textContent = r.transcript || '(无转写)';
-  drawer.classList.add('open');
-}
-
-async function analyze(id) {
-  $('d-actions').querySelector('button').disabled = true;
-  const res = await api(`/api/communications/${id}/analyze`, { method: 'POST' });
-  const data = await res.json();
-  if (!res.ok) { alert('分析失败：' + data.error); return; }
-  renderReport(data.report);
-  $('d-actions').querySelector('button').disabled = false;
-  load();
-}
-
-function renderReport(rp) {
-  if (!rp) { $('d-report').innerHTML = '<div class="muted">尚未生成分析报告。</div>'; return; }
-  const lvl = l => ({ 高: 'high', 中: 'mid', 低: 'low' }[l] || 'low');
-  $('d-report').innerHTML = `
-    <h3>摘要</h3><div>${esc(rp.summary)}</div>
-    ${rp.key_facts?.length ? `<h3>关键信息</h3><ul class="plain">${rp.key_facts.map(f => `<li><b>${esc(f.k)}</b>：${esc(f.v)}</li>`).join('')}</ul>` : ''}
-    <h3>客户立场</h3>
-    <div class="grid2">
-      <div><b class="ok">认同</b><ul class="plain">${(rp.stance?.support || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">无</li>'}</ul></div>
-      <div><b class="err">顾虑</b><ul class="plain">${(rp.stance?.concerns || []).map(x => `<li>${esc(x)}</li>`).join('') || '<li class="muted">无</li>'}</ul></div>
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  const main = mountAppShell('home', me.name);
+  const hour = new Date().getHours();
+  const hello = hour < 6 ? '夜深了' : hour < 12 ? '早安' : hour < 14 ? '午安' : hour < 18 ? '下午好' : '晚上好';
+  main.innerHTML = `
+    <div class="card" style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
+      <div style="font-size:17px;font-weight:600">☀️ ${hello}，${esc(me.name)}</div>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn primary" onclick="location.href='/communications.html'">发起沟通 ∨</button>
     </div>
-    ${rp.competitors?.length ? `<h3>竞品提及</h3><div class="chips">${rp.competitors.map(c => `<span class="chip">${esc(c.name)} ×${c.mentions}</span>`).join('')}</div>` : ''}
-    ${rp.intention ? `<h3>意向度</h3><div><span class="score">${rp.intention.score}</span> <span class="badge ${lvl(rp.intention.level)}">${rp.intention.level}</span>
-      <ul class="plain">${rp.intention.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
-    ${rp.tasks?.length ? `<h3>任务达成（${rp.tasks.filter(t => t.status === '完成').length}/${rp.tasks.length}）</h3>
-      <table><thead><tr><th>检查项</th><th>状态</th><th>依据</th></tr></thead><tbody>
-      ${rp.tasks.map(t => `<tr><td>${esc(t.item)}</td><td><span class="badge ${t.status === '完成' ? 'analyzed' : t.status === '不充分' ? 'mid' : 'low'}">${t.status}</span></td><td class="evidence">${esc(t.evidence)}</td></tr>`).join('')}
-      </tbody></table>` : ''}
-    ${rp.violations?.length ? `<h3>违规检测（命中 ${rp.violations.length} 项）</h3>
-      <table><thead><tr><th>违规项</th><th>严重级</th><th>触发片段</th></tr></thead><tbody>
-      ${rp.violations.map(v => `<tr><td>${esc(v.item)}</td><td><span class="badge ${v.severity === '高' ? 'high' : 'mid'}">${v.severity}</span></td><td class="evidence">${esc(v.evidence)}</td></tr>`).join('')}
-      </tbody></table>` : `<h3>违规检测</h3><div class="muted">已完成全量违规项检测，未发现任何违规内容</div>`}
-    ${rp.todos?.length ? `<h3>待办</h3><ul class="plain">${rp.todos.map(t => `<li>${esc(t.what)}${t.due ? `（${esc(t.due)}）` : ''}</li>`).join('')}</ul>` : ''}
-    ${rp.meta?.warnings?.length ? `<h3>分析警告</h3><ul class="plain">${rp.meta.warnings.map(w => `<li class="err">${esc(w)}</li>`).join('')}</ul>` : ''}
-    <div class="footnote">以上内容由 AI 生成（模型：${esc(rp.meta?.model || '?')}，${fmtTime(rp.meta?.generated_at)}），仅供参考。</div>`;
-}
+    <div class="card" style="background:linear-gradient(90deg,#eef2ff,#fff);border-color:#e0e7ff;margin-bottom:14px;color:#4f46e5">
+      “准备十个好问题，胜过准备十套话术。”
+    </div>
+    <div class="stat-row">
+      <div class="stat-card"><div class="k">沟通次数</div><div class="v" id="st-count">-</div><div class="sub" id="st-count-sub"></div></div>
+      <div class="stat-card"><div class="k">沟通时长 (分钟)</div><div class="v" id="st-dur">-</div><div class="sub" id="st-dur-sub"></div></div>
+      <div class="stat-card"><div class="k">客户数</div><div class="v" id="st-cust">-</div><div class="sub">本人名下</div></div>
+      <div class="stat-card"><div class="k">今日待办</div><div class="v" id="st-todo">-</div><div class="sub">来自沟通承诺提取</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="card"><div style="font-weight:600;margin-bottom:12px">今日日程 <a href="/plans.html" style="float:right;font-weight:400;font-size:13px">全部日程 ›</a></div><div id="todo-plans">加载中…</div></div>
+      <div class="card"><div style="font-weight:600;margin-bottom:12px">今日待办 <a href="/communications.html" style="float:right;font-weight:400;font-size:13px">全部待办 ›</a></div><div id="todo-list">加载中…</div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><div style="font-weight:600;margin-bottom:12px">情报中心 <span style="font-size:12px;color:var(--text-3)">访前准备 · 风险提醒</span></div><div id="intel">加载中…</div></div>`;
 
-async function logout() { await api('/api/logout', { method: 'POST' }); location.href = '/login.html'; }
-init();
+  // 统计：沟通（sales 仅本人）
+  const comms = await api('/api/communications');
+  const week = comms.filter(c => new Date(c.created_at) > new Date(Date.now() - 7 * 86400e3));
+  document.getElementById('st-count').textContent = week.length;
+  document.getElementById('st-count-sub').textContent = `本周 · 累计 ${comms.length}`;
+  document.getElementById('st-dur').textContent = Math.round(week.reduce((a, c) => a + (c.duration_s || 0), 0) / 60);
+  document.getElementById('st-dur-sub').textContent = '本周 (分钟)';
+  let todos = [];
+  for (const c of comms.slice(0, 20)) {
+    if (!c.report) continue;
+    try { const rp = JSON.parse(c.report); (rp.todos || []).forEach(t => todos.push({ ...t, topic: c.topic || ('沟通#' + c.id), at: c.created_at })); } catch {}
+  }
+  document.getElementById('st-todo').textContent = todos.length;
+  // 日程（沟通计划）
+  const plans = await api('/api/plans').catch(() => []);
+  const today = new Date().toISOString().slice(0, 10);
+  const todayPlans = plans.filter(p => (p.plan_at || '').startsWith(today) && p.status === 'planned');
+  const emptyBox = (t) => `<div class="empty" style="padding:26px 0"><div class="icon">🗓️</div>${t}</div>`;
+  document.getElementById('todo-plans').innerHTML = todayPlans.length
+    ? todayPlans.map(p => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6">🕑 <b>${esc((p.plan_at || '').slice(11, 16))}</b> ${esc(p.title)} <span class="tag info">${esc(p.customer_name || '')}</span></div>`).join('')
+    : emptyBox('今日暂无日程');
+  document.getElementById('todo-list').innerHTML = todos.length
+    ? todos.slice(0, 6).map(t => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6">☑️ ${esc(t.what)} ${t.due ? `<span class="tag warn">${esc(t.due)}</span>` : ''}<div style="font-size:12px;color:var(--text-3)">${esc(t.topic)}</div></div>`).join('')
+    : emptyBox('今日暂无待办');
+  // 情报中心：风险关键词命中的沟通
+  const risky = comms.filter(c => c.meta && (JSON.parse(c.meta).alerts || []).length);
+  document.getElementById('intel').innerHTML = risky.length
+    ? risky.slice(0, 5).map(c => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6">⚠️ <a href="/communication.html?id=${c.id}">${esc(c.topic || '沟通#' + c.id)}</a> <span class="tag danger">风险提示</span></div>`).join('')
+    : `<div class="empty" style="padding:26px 0"><div class="icon">📡</div>暂无数据</div>`;
+})();
 </script>
 </body>
 </html>

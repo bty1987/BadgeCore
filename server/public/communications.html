@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>沟通 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  const main = mountAppShell('comm', me.name);
+  main.innerHTML = `
+    <div class="page-head"><h1>沟通</h1><span class="spacer"></span>
+      <button class="btn" onclick="location.href='/plans.html'">沟通计划</button>
+      <button class="btn primary" id="btn-upload">上传录音</button></div>
+    <div class="card">
+      <div class="filter-row">
+        <input id="q" placeholder="搜索主题/内容…" style="min-width:220px" onkeydown="if(event.key==='Enter')load()">
+        <select id="status" onchange="load()">
+          <option value="">处理状态：全部</option>
+          <option value="recorded">已录制</option><option value="transcribed">已转写</option>
+          <option value="analyzing">分析中</option><option value="analyzed">已分析</option>
+        </select>
+        <button class="btn" onclick="load()">查询</button>
+        <span class="spacer" style="flex:1"></span><span id="count" style="color:var(--text-3);font-size:13px"></span>
+      </div>
+      <div id="tbl"></div>
+    </div>
+    <input type="file" id="file" accept=".mp3,.wav,.m4a,.aac,.mp4,.ogg" style="display:none">`;
+
+  const ST = { recorded: ['已录制', 'off'], transcribed: ['已转写', 'info'], analyzing: ['分析中', 'warn'], analyzed: ['已分析', 'on'] };
+  window.load = async function () {
+    const q = document.getElementById('q').value, st = document.getElementById('status').value;
+    const rows = await api(`/api/communications?q=${encodeURIComponent(q)}${st ? '&status=' + st : ''}`);
+    document.getElementById('count').textContent = `共 ${rows.length} 条`;
+    renderTable(document.getElementById('tbl'), [
+      { key: 'topic', title: '主题', render: r => `<a href="/communication.html?id=${r.id}">${esc(r.topic || '沟通 #' + r.id)}</a>` },
+      { key: 'owner', title: '销售', w: '90px', render: r => esc(r.owner || '-') },
+      { key: 'duration_s', title: '时长', w: '80px', render: r => r.duration_s ? Math.floor(r.duration_s / 60) + '′' + (r.duration_s % 60) + '″' : '-' },
+      { key: 'status', title: '处理状态', w: '90px', render: r => { const s = ST[r.status] || [r.status, 'off']; return `<span class="tag ${s[1]}">${s[0]}</span>`; } },
+      { key: 'intention', title: '意向度', w: '80px', render: r => { try { const rp = JSON.parse(r.report || 'null'); return rp?.intention ? `<b>${rp.intention.score}</b> · ${rp.intention.level}` : '-'; } catch { return '-'; } } },
+      { key: 'viol', title: '违规', w: '70px', render: r => { try { const rp = JSON.parse(r.report || 'null'); const n = (rp?.violations || []).length; return n ? `<span class="tag danger">${n} 项</span>` : '<span style="color:var(--text-3)">无</span>'; } catch { return '-'; } } },
+      { key: 'created_at', title: '沟通时间', w: '140px', render: r => fmtTime(r.created_at) },
+    ], rows, r => `<a href="/communication.html?id=${r.id}">详情</a>${me.role === 'admin' ? ` <a style="color:var(--danger)" onclick="del(${r.id})">删除</a>` : ''}`);
+  };
+  window.del = async function (id) {
+    if (!confirm('确定删除该沟通记录？')) return;
+    await api('/api/communications/' + id, { method: 'DELETE' }); toast('已删除'); load();
+  };
+  document.getElementById('btn-upload').onclick = () => document.getElementById('file').click();
+  document.getElementById('file').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    toast('上传中，请不要关闭页面…');
+    const fd = new FormData(); fd.append('file', f);
+    const r = await fetch('/api/ingest-file', { method: 'POST', body: fd }).catch(() => null);
+    if (r && r.ok) { toast('上传成功，转写分析中'); setTimeout(load, 1500); }
+    else { toast(r && r.status !== 404 ? '上传失败' : '当前版本未开启文件上传入口（REC-03 排期中），可由接收服务自动入库'); load(); }
+  };
+  load();
+})();
+</script>
+</body>
+</html>

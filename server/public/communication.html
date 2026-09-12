@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>沟通详情 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
+</head>
+<body>
+<script>
+const id = new URLSearchParams(location.search).get('id');
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  const main = mountAppShell('comm', me.name);
+  if (!id) { main.innerHTML = '<div class="card">缺少 id 参数</div>'; return; }
+  const c = await api('/api/communications/' + id);
+  let rp = null; try { rp = JSON.parse(c.report || 'null'); } catch {}
+  const stMap = { recorded: '已录制', transcribed: '已转写', analyzing: '分析中', analyzed: '已分析' };
+  main.innerHTML = `
+    <div class="page-head"><a href="/communications.html">‹ 返回沟通列表</a>
+      <h1 style="font-size:16px">${esc(c.topic || '沟通 #' + c.id)}</h1>
+      <span class="tag info">${stMap[c.status] || c.status || '-'}</span>
+      <span style="color:var(--text-3);font-size:13px">${fmtTime(c.created_at)} · ${c.duration_s ? Math.floor(c.duration_s / 60) + ' 分 ' + (c.duration_s % 60) + ' 秒' : '时长未知'} · 销售 ${esc(c.owner || '-')}</span>
+      <span class="spacer"></span>
+      <button class="btn" onclick="reanalyze()">重新分析</button></div>
+    <div class="tabbar">
+      <a class="active" onclick="show(0,this)">字幕全文</a><a onclick="show(1,this)">摘要</a>
+      <a onclick="show(2,this)">分析报告</a><a onclick="show(3,this)">待办</a>
+    </div>
+    <div class="card" id="pane0" style="white-space:pre-wrap;line-height:2">${c.transcript ? esc(c.transcript) : '<div class="empty"><div class="icon">🎙️</div>转写尚未完成</div>'}</div>
+    <div class="card" id="pane1" style="display:none">${rp?.summary ? esc(rp.summary) : '<div class="empty"><div class="icon">📝</div>暂无摘要，等待分析完成</div>'}</div>
+    <div id="pane2" style="display:none">${renderReport(rp)}</div>
+    <div class="card" id="pane3" style="display:none">${renderTodos(rp)}</div>`;
+
+  window.show = (i, el) => {
+    document.querySelectorAll('.tabbar a').forEach(a => a.classList.remove('active'));
+    el.classList.add('active');
+    [0, 1, 2, 3].forEach(k => document.getElementById('pane' + k).style.display = k === i ? '' : 'none');
+  };
+  window.reanalyze = async function () {
+    toast('分析任务已提交…');
+    await api(`/api/communications/${id}/analyze`, { method: 'POST' }).catch(() => {});
+    setTimeout(() => location.reload(), 2000);
+  };
+  function renderTodos(rp) {
+    if (!rp?.todos?.length) return '<div class="empty"><div class="icon">☑️</div>暂无待办（从承诺事项自动提取）</div>';
+    return rp.todos.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6">☑️ ${esc(t.what)} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
+  }
+  function renderReport(rp) {
+    if (!rp) return '<div class="empty"><div class="icon">🤖</div>暂无分析结果。点击右上角「重新分析」生成。</div>';
+    const sec = (title, inner) => `<div class="card" style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:10px">${title}</div>${inner}</div>`;
+    let html = '';
+    html += sec('客户立场（ANA-03）', `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div><span class="tag on">认同点</span><ul style="margin:8px 0 0 18px;line-height:1.9">${(rp.stance?.support || []).map(s => `<li>${esc(s)}</li>`).join('') || '<li style="list-style:none;color:var(--text-3)">无</li>'}</ul></div>
+        <div><span class="tag danger">顾虑点</span><ul style="margin:8px 0 0 18px;line-height:1.9">${(rp.stance?.concerns || []).map(s => `<li>${esc(s)}</li>`).join('') || '<li style="list-style:none;color:var(--text-3)">无</li>'}</ul></div>
+        <div><span class="tag off">未提及</span><ul style="margin:8px 0 0 18px;line-height:1.9">${(rp.stance?.unmentioned || []).map(s => `<li>${esc(s)}</li>`).join('') || '<li style="list-style:none;color:var(--text-3)">无</li>'}</ul></div>
+      </div>`);
+    html += sec('意向度评估（ANA-05）', rp.intention ? `
+      <div style="display:flex;align-items:center;gap:20px">
+        <div style="font-size:34px;font-weight:700;color:${rp.intention.score >= 70 ? 'var(--success)' : rp.intention.score >= 40 ? 'var(--warning)' : 'var(--danger)'}">${rp.intention.score}<span style="font-size:14px;color:var(--text-3)"> /100</span></div>
+        <span class="tag ${rp.intention.level === '高' ? 'on' : rp.intention.level === '中' ? 'warn' : 'danger'}" style="font-size:14px">意向度：${rp.intention.level}</span>
+        <div style="color:var(--text-2);font-size:13px">${(rp.intention.reasons || []).map(esc).join('；')}</div>
+      </div>` : '无');
+    if ((rp.competitors || []).length) html += sec('竞品提及（ANA-04）', rp.competitors.map(c => `
+      <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><b>${esc(c.name)}</b> 提及 ${c.mentions || 0} 次
+      ${c.our_advantage ? `<div style="color:var(--text-2);font-size:13px">我方优势：${esc(c.our_advantage)}</div>` : ''}
+      ${c.risk ? `<div style="color:var(--danger);font-size:13px">风险：${esc(c.risk)}</div>` : ''}</div>`).join(''));
+    if ((rp.tasks || []).length) html += sec('任务达成（ANA-06）', `<table class="tbl"><thead><tr><th>任务项</th><th style="width:90px">判定</th><th>依据原文</th></tr></thead><tbody>
+      ${rp.tasks.map(t => `<tr><td>${esc(t.item)}</td><td><span class="tag ${t.status === '完成' ? 'on' : t.status === '不充分' ? 'warn' : 'off'}">${t.status}</span></td><td style="color:var(--text-2)">${esc(t.evidence || '')}</td></tr>`).join('')}</tbody></table>`);
+    if ((rp.violations || []).length) html += sec('违规检测（ANA-08）', rp.violations.map(v => `
+      <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><span class="tag danger">${esc(v.severity || '中')}</span> <b>${esc(v.item)}</b>
+      <div style="color:var(--text-2);font-size:13px;margin-top:4px">证据：${esc(v.evidence || '')}</div></div>`).join(''));
+    else html += sec('违规检测（ANA-08）', '<span class="tag on">已完成全量违规项检测，未发现任何违规内容</span>');
+    return html;
+  }
+})();
+</script>
+</body>
+</html>

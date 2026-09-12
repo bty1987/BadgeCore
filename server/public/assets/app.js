@@ -115,4 +115,27 @@ async function loadMe() {
     return me;
   } catch { return null; }
 }
+/** 销售端窄边栏（对照 01-coach-home 截图：首页/沟通/客户/案例库/看板 + 底部头像） */
+function appSidebar(active, meName) {
+  const N = [
+    ['home', '🏠', '首页', '/index.html'],
+    ['comm', '💬', '沟通', '/communications.html'],
+    ['cust', '👥', '客户', '/customers.html'],
+    ['cases', '📚', '案例库', '/cases.html'],
+    ['dash', '📊', '看板', '/dashboard.html'],
+  ];
+  return `<div class="appbar">
+    <div class="logo"></div>
+    ${N.map(([k, ic, name, href]) => `<a class="nav ${k === active ? 'active' : ''}" href="${href}"><span class="ic">${ic}</span>${name}</a>`).join('')}
+    <div class="me" title="${esc(meName || '')}" onclick="location.href='/settings.html'">${esc((meName || '我')[0])}</div>
+  </div>`;
+}
+/** 销售端页面骨架挂载：document.body 前置 appbar，返回主容器 */
+function mountAppShell(active, meName) {
+  document.body.insertAdjacentHTML('afterbegin', appSidebar(active, meName));
+  const main = document.createElement('div');
+  main.className = 'appmain';
+  document.body.appendChild(main);
+  return main;
+}
 document.addEventListener('DOMContentLoaded', () => { if (!document.getElementById('toast')) { const t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); } });

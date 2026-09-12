@@ -1,152 +1,115 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>数据看板 · BadgeCore</title>
-<link rel="stylesheet" href="/style.css">
+<meta charset="UTF-8">
+<title>指挥舱 · 数据看板 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<script src="/assets/app.js"></script>
 <style>
-.stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
-.stat { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; }
-.stat .v { font-size: 24px; font-weight: 600; }
-.stat .k { color: #6b7280; font-size: 12px; margin-top: 2px; }
-.bar-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
-.bar-row .name { width: 90px; text-align: right; color: #374151; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-row .bar { height: 14px; border-radius: 4px; background: #1f883d; min-width: 2px; }
-.bar-row .val { color: #57606a; font-size: 12px; }
-.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .bar { height: 10px; border-radius: 5px; background: var(--primary-light); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--primary); border-radius: 5px; }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <span class="brand">BadgeCore</span>
-  <nav>
-    <a href="/">沟通记录</a>
-    <a href="/customers.html">客户</a>
-    <a href="/dashboard.html" class="active">数据看板</a>
-    <a href="/ask.html">Ask AI</a>
-    <a href="/attendance.html">考勤</a>
-    <a href="/devices.html">设备</a>
-    <a href="/config.html">沟通配置</a>
-    <a href="/settings.html">设置</a>
-    <a href="/notifications.html">消息</a>
-  </nav>
-  <span class="spacer"></span><span class="who" id="who"></span>
-  <button onclick="location='/login.html'">退出</button>
-</div>
-<div class="wrap">
-  <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px">
-    <h2 style="margin:0">数据看板（对标运营看板/排行榜/违规分布）</h2>
-    <select id="days" onchange="load()" style="width:130px">
-      <option value="7">近 7 天</option>
-      <option value="30" selected>近 30 天</option>
-      <option value="90">近 90 天</option>
-    </select>
-    <button onclick="window.open('/api/dashboard/export?days='+$('days').value)">导出（水印+审计）</button>
-    <span class="spacer" style="flex:1"></span>
-    <button class="primary" onclick="genReport('weekly')">生成本周报告</button>
-    <button class="primary" onclick="genReport('monthly')">生成本月报告</button>
-  </div>
-
-  <div class="stats" id="stats"></div>
-
-  <div class="card">
-    <h3 style="margin-top:0">每日沟通趋势（次数 / 分钟）</h3>
-    <div id="trend"></div>
-  </div>
-
-  <div class="grid3">
-    <div class="card"><h3 style="margin-top:0">任务达成排行榜</h3><div id="rank-tasks"></div></div>
-    <div class="card"><h3 style="margin-top:0">能力评估排行榜（平均意向度）</h3><div id="rank-ability"></div></div>
-    <div class="card"><h3 style="margin-top:0">团队违规率分布</h3><div id="viol"></div></div>
-  </div>
-
-  <div class="grid3" style="grid-template-columns: 1fr 1fr">
-    <div class="card"><h3 style="margin-top:0">最近会话</h3><table id="recent"></table></div>
-    <div class="card"><h3 style="margin-top:0">团队报告（AI 周报/月报）</h3><div id="reports"></div></div>
+<div id="top"></div>
+<div class="sidelayout">
+  <div id="side"></div>
+  <div class="main">
+    <div class="page-head"><h1>指挥舱 · 数据看板</h1>
+      <select id="days" onchange="load()" style="width:auto">
+        <option value="7">近 7 天</option><option value="30" selected>近 30 天</option>
+        <option value="90">近 90 天</option><option value="365">近一年</option>
+      </select></div>
+    <div class="tabbar" id="tabs">
+      <a class="active" onclick="showView(0,this)">工作台总览</a><a onclick="showView(1,this)">团队报告</a>
+      <a onclick="showView(2,this)">任务达成排行</a><a onclick="showView(3,this)">能力评估排行</a>
+      <a onclick="showView(4,this)">违规分布</a><a onclick="showView(5,this)">最新沟通</a>
+      <a onclick="showView(6,this)">导出</a>
+    </div>
+    <div id="views"></div>
   </div>
 </div>
 <script>
-const $ = id => document.getElementById(id);
-async function api(url, opts) {
-  const res = await fetch(url, opts);
-  if (res.status === 401) { location.href = '/login.html'; throw 0; }
-  return res;
-}
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const fmt = iso => iso ? iso.replace('T', ' ').slice(5, 16) : '-';
-
-async function init() {
-  const me = await (await api('/api/me')).json();
-  $('who').textContent = `${me.name}（${me.role}）`;
-  load(); loadReports();
-}
-async function load() {
-  const d = await (await api('/api/dashboard?days=' + $('days').value)).json();
-  const o = d.overview;
-  $('stats').innerHTML = `
-    <div class="stat"><div class="v">${o.comm_count}</div><div class="k">沟通次数</div></div>
-    <div class="stat"><div class="v">${Math.round(o.total_duration / 60)}m</div><div class="k">沟通总时长</div></div>
-    <div class="stat"><div class="v">${o.user_count}</div><div class="k">参与人数</div></div>
-    <div class="stat"><div class="v">${o.avg_intention ?? '-'}</div><div class="k">平均意向度</div></div>
-    <div class="stat"><div class="v" style="color:${o.violation_rate > 20 ? '#cf222e' : '#1a7f37'}">${o.violation_rate}%</div><div class="k">沟通违规率</div></div>`;
-  // 趋势 SVG（次数柱 + 时长折线，归一化）
-  const days = d.by_day, W = 980, H = 160, pad = 24;
-  if (!days.length) { $('trend').innerHTML = '<div class="muted">暂无数据</div>'; }
-  else {
-    const bw = Math.max(4, (W - pad * 2) / days.length - 4);
-    const maxC = Math.max(...days.map(x => x.count), 1), maxD = Math.max(...days.map(x => x.duration), 1);
-    const bars = days.map((x, i) => {
-      const h = (x.count / maxC) * (H - 50);
-      const cx = pad + i * ((W - pad * 2) / days.length) + bw / 2;
-      return { rect: `<rect x="${pad + i * ((W - pad * 2) / days.length)}" y="${H - 20 - h}" width="${bw}" height="${h}" rx="2" fill="#54aeff66"><title>${x.date}：${x.count} 次</title></rect>`, cx, cy: H - 20 - (x.duration / 60) / (maxD / 60) * (H - 50) };
-    });
-    const line = bars.map((b, i) => (i ? 'L' : 'M') + b.cx.toFixed(1) + ',' + b.cy.toFixed(1)).join('');
-    $('trend').innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%">
-      ${bars.map(b => b.rect).join('')}
-      <path d="${line}" fill="none" stroke="#1f883d" stroke-width="2"/>
-      ${days.filter((_, i) => i % Math.ceil(days.length / 10) === 0).map((x, k) => `<text x="${bars[days.indexOf(x)].cx}" y="${H - 4}" font-size="10" fill="#9ca3af" text-anchor="middle">${x.date.slice(5)}</text>`).join('')}
-    </svg><div class="muted">▉ 次数（柱） — 时长（线）</div>`;
+let D = null;
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  if (me.role === 'sales') { document.querySelector('.main').innerHTML = '<div class="card">数据看板仅管理者可见。</div>'; return; }
+  document.getElementById('top').innerHTML = adminTopbar('admin');
+  document.getElementById('side').innerHTML = adminSidebar('');
+  loadMe();
+  const views = document.getElementById('views');
+  for (let i = 0; i < 7; i++) {
+    const v = document.createElement('div'); v.id = 'view' + i;
+    if (i) v.style.display = 'none';
+    views.appendChild(v);
   }
-  const barList = (arr, valFn, max, unit) => arr.length ? arr.map(u => `
-    <div class="bar-row"><span class="name">${esc(u.owner)}</span>
-      <span class="bar" style="width:${Math.max(2, (valFn(u) / max) * 100)}%"></span>
-      <span class="val">${valFn(u)}${unit}</span></div>`).join('') : '<div class="muted">暂无数据</div>';
-  $('rank-tasks').innerHTML = barList(d.rank_tasks, u => u.task_rate, Math.max(...d.rank_tasks.map(u => u.task_rate), 1), '%');
-  $('rank-ability').innerHTML = barList(d.rank_ability, u => u.intention, 100, '');
-  $('viol').innerHTML = d.violation_dist.length ? `<table><thead><tr><th>成员</th><th>违规次数</th><th>命中率</th></tr></thead><tbody>
-    ${d.violation_dist.map(v => `<tr><td>${esc(v.owner)}</td><td>${v.violations}</td><td><span class="badge ${v.rate > 30 ? 'high' : 'mid'}">${v.rate}%</span></td></tr>`).join('')}
-    </tbody></table>` : '<div class="muted">未检出违规 👍</div>';
-  $('recent').innerHTML = `<thead><tr><th>时间</th><th>成员</th><th>主题</th><th>状态</th><th>告警</th></tr></thead><tbody>
-    ${(d.recent || []).map(r => `<tr><td>${fmt(r.created_at)}</td><td>${esc(r.owner)}</td><td>${esc(r.topic) || '-'}</td>
-    <td><span class="badge ${r.status}">${r.status}</span></td><td>${r.alerts ? `<span class="badge high">${r.alerts}</span>` : '-'}</td></tr>`).join('')}
-    </tbody>`;
-}
-async function genReport(period) {
-  const res = await api('/api/report/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ period }) });
-  const d = await res.json();
-  if (!res.ok) { alert(d.error); return; }
-  loadReports();
-  alert(d.summary);
-}
-async function loadReports() {
-  const rows = await (await api('/api/report/list')).json();
-  $('reports').innerHTML = rows.map(r => `
-    <details style="padding:6px 0">
-      <summary><b>${esc(r.label)}</b> <span class="muted">${fmt(r.created_at)}${r.ai_generated ? ' · AI 生成' : ''}</span></summary>
-      <div class="muted" id="rep-${r.id}">加载中…</div>
-    </details>`).join('') || '<div class="muted">暂无报告，点右上角生成。</div>';
-  for (const r of rows) {
-    const full = await (await api(`/api/report/${r.id}`)).json();
-    const c = full.content;
-    const el = $(`rep-${r.id}`);
-    if (el) el.innerHTML = `<div style="margin:6px 0">${esc(c.summary)}</div>
-      <div class="muted">亮点：${(c.highlights || []).map(esc).join('；')}</div>
-      <div class="muted">风险：${(c.risks || []).map(esc).join('；')}</div>
-      <div class="footnote">以上内容由 AI 生成，仅供参考。</div>`;
+  window.showView = (i, el) => {
+    document.querySelectorAll('#tabs a').forEach(a => a.classList.remove('active'));
+    el.classList.add('active');
+    for (let k = 0; k < 7; k++) document.getElementById('view' + k).style.display = k === i ? '' : 'none';
+  };
+  window.load = async function () {
+    const days = document.getElementById('days').value;
+    D = await api('/api/dashboard?days=' + days);
+    const o = D.overview;
+    document.getElementById('view0').innerHTML = `
+      <div class="stat-row">
+        <div class="stat-card"><div class="k">沟通总数</div><div class="v">${o.comm_count}</div><div class="sub">近 ${D.days} 天</div></div>
+        <div class="stat-card"><div class="k">沟通总时长</div><div class="v">${Math.round(o.total_duration / 60)}</div><div class="sub">分钟</div></div>
+        <div class="stat-card"><div class="k">参与销售</div><div class="v">${o.user_count}</div><div class="sub">人</div></div>
+        <div class="stat-card"><div class="k">违规沟通占比</div><div class="v" style="color:${o.violation_rate > 10 ? 'var(--danger)' : 'var(--text)'}">${o.violation_rate}%</div><div class="sub">命中违规/风险</div></div>
+        <div class="stat-card"><div class="k">平均意向度</div><div class="v">${o.avg_intention ?? '-'}</div><div class="sub">0-100</div></div>
+      </div>
+      <div class="card"><div style="font-weight:600;margin-bottom:12px">每日沟通趋势</div><div id="trend" style="display:flex;align-items:flex-end;gap:4px;height:160px"></div></div>`;
+    renderTrend();
+    const merged = mergeUsers();
+    document.getElementById('view1').innerHTML = `<div class="card" style="padding:16px"><div style="font-weight:600;margin-bottom:10px">团队效能报告（按人聚合）</div>${teamTable(merged)}</div>`;
+    document.getElementById('view2').innerHTML = `<div class="card" style="padding:16px"><div style="font-weight:600;margin-bottom:10px">任务达成排行榜（对照任务模型）</div>${rankTable(D.rank_tasks, 'task')}</div>`;
+    document.getElementById('view3').innerHTML = `<div class="card" style="padding:16px"><div style="font-weight:600;margin-bottom:10px">能力评估排行榜（平均意向度）</div>${rankTable(D.rank_ability, 'intention')}</div>`;
+    document.getElementById('view4').innerHTML = `<div class="card" style="padding:16px"><div style="font-weight:600;margin-bottom:10px">团队违规次数分布</div>
+      ${D.violation_dist.length ? `<table class="tbl"><thead><tr><th>销售</th><th>违规沟通数</th><th>占其沟通比例</th></tr></thead><tbody>
+      ${D.violation_dist.map(v => `<tr><td>${esc(v.owner)}</td><td>${v.violations}</td><td><span class="tag danger">${v.rate}%</span></td></tr>`).join('')}</tbody></table>`
+      : '<span class="tag on">已完成全量违规项检测，未发现任何违规内容</span>'}</div>`;
+    document.getElementById('view5').innerHTML = `<div class="card" style="padding:0"><table class="tbl"><thead><tr><th>时间</th><th>销售</th><th>主题</th><th>状态</th><th>预警</th></tr></thead><tbody>
+      ${D.recent.map(r => `<tr><td>${fmtTime(r.created_at)}</td><td>${esc(r.owner || '-')}</td>
+        <td><a href="/communication.html?id=${r.id}">${esc(r.topic || '沟通 #' + r.id)}</a></td>
+        <td>${esc(r.status || '-')}</td><td>${r.alerts ? `<span class="tag danger">${r.alerts} 条</span>` : '-'}</td></tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:20px">暂无沟通</td></tr>'}</tbody></table></div>`;
+    document.getElementById('view6').innerHTML = `<div class="card" style="padding:16px">
+      <div style="font-weight:600;margin-bottom:10px">导出（CMP-13 水印导出）</div>
+      <div style="color:var(--text-2);font-size:13px;margin-bottom:12px">导出文件含访问者水印（导出人/时间），并记入审计日志。</div>
+      <a class="btn primary" href="/api/dashboard/export?days=${D.days}">导出近 ${D.days} 天数据</a></div>`;
+  };
+  function renderTrend() {
+    const days = D.by_day.slice(-30);
+    const max = Math.max(1, ...days.map(x => x.count));
+    document.getElementById('trend').innerHTML = days.map(x =>
+      `<div style="flex:1;text-align:center" title="${x.date}: ${x.count} 次"><div style="font-size:10px;color:var(--text-3)">${x.count || ''}</div>
+       <div class="bar" style="height:${Math.max(4, x.count / max * 130)}px;background:var(--primary);margin:4px 0"></div>
+       <div style="font-size:9px;color:var(--text-3)">${x.date.slice(5)}</div></div>`).join('');
   }
-}
-init();
+  function mergeUsers() {
+    const m = {};
+    D.rank_tasks.forEach(u => m[u.owner] = { ...u });
+    D.rank_ability.forEach(u => m[u.owner] = { ...(m[u.owner] || { owner: u.owner, count: 0, duration: 0, violations: 0 }), intention: u.intention });
+    return Object.values(m).sort((a, b) => b.count - a.count);
+  }
+  function teamTable(rows) {
+    if (!rows.length) return '<div class="empty">暂无数据</div>';
+    return `<table class="tbl"><thead><tr><th>销售</th><th>沟通数</th><th>时长(分)</th><th>任务达成率</th><th>平均意向度</th><th>违规数</th></tr></thead><tbody>
+      ${rows.map(u => `<tr><td><b>${esc(u.owner)}</b></td><td>${u.count}</td><td>${Math.round(u.duration / 60)}</td>
+        <td>${u.task_rate != null ? u.task_rate + '%' : '-'}</td><td>${u.intention ?? '-'}</td><td>${u.violations || 0}</td></tr>`).join('')}</tbody></table>`;
+  }
+  function rankTable(rows, kind) {
+    if (!rows.length) return '<div class="empty"><div class="icon">📊</div>暂无排行数据</div>';
+    const label = kind === 'task' ? '任务达成率' : '平均意向度';
+    const val = u => kind === 'task' ? u.task_rate : u.intention;
+    return `<table class="tbl"><thead><tr><th>销售</th><th>沟通数</th><th>时长(分)</th><th style="width:220px">${label}</th></tr></thead><tbody>
+      ${rows.map((u, i) => `<tr><td><b>${i + 1}</b> ${esc(u.owner)}</td><td>${u.count}</td><td>${Math.round(u.duration / 60)}</td>
+        <td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><i style="width:${val(u)}%"></i></div><b>${val(u)}${kind === 'task' ? '%' : ''}</b></div></td></tr>`).join('')}</tbody></table>`;
+  }
+  load();
+})();
 </script>
 </body>
 </html>

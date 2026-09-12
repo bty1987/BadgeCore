@@ -1,39 +1,49 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>登录 · BadgeCore</title>
-<link rel="stylesheet" href="/style.css">
+<meta charset="UTF-8">
+<title>登录 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css">
+<style>
+  body { height: 100vh; display: flex; }
+  .left { flex: 1.2; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 60%, #a855f7 100%); color: #fff; display: flex; flex-direction: column; justify-content: center; padding: 8vh 7vw; }
+  .left .logo { width: 52px; height: 52px; border-radius: 14px; background: rgba(255,255,255,.2); margin-bottom: 30px; }
+  .left h1 { font-size: 30px; line-height: 1.4; margin-bottom: 14px; }
+  .left p { font-size: 15px; opacity: .85; }
+  .left .slogan { margin-top: 6vh; font-size: 13px; opacity: .6; }
+  .right { flex: 1; display: flex; align-items: center; justify-content: center; background: #fff; }
+  .box { width: 340px; }
+  .box h2 { font-size: 20px; margin-bottom: 26px; }
+  .form-item { margin-bottom: 16px; }
+  .form-item label { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 6px; }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; margin: 4px 0; }
+  .btn { width: 100%; justify-content: center; padding: 10px; font-size: 14.5px; }
+</style>
 </head>
 <body>
-<div class="login-box">
-  <div class="brand">BadgeCore 员工数字工牌</div>
-  <div class="card">
-    <label>账号</label>
-    <input id="name" autocomplete="username" placeholder="admin">
-    <label>密码</label>
-    <input id="password" type="password" autocomplete="current-password">
-    <div style="margin-top:16px">
-      <button class="primary" style="width:100%" onclick="login()">登 录</button>
-    </div>
-    <div id="msg" class="muted" style="margin-top:10px"></div>
+  <div class="left">
+    <div class="logo"></div>
+    <h1>BadgeCore<br>员工数字工牌</h1>
+    <p>全员模式：身份 · 考勤 · 门禁 · 通知<br>业务模式：录音 → 转写 → AI 分析 → 赋能</p>
+    <div class="slogan">每一次沟通，都是进步。</div>
   </div>
-</div>
+  <div class="right"><div class="box">
+    <h2>欢迎使用 BadgeCore</h2>
+    <div class="form-item"><label>账号</label><input id="name" placeholder="员工姓名"></div>
+    <div class="form-item"><label>密码</label><input id="pass" type="password" placeholder="密码" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <div class="err" id="err"></div>
+    <button class="btn primary" onclick="doLogin()">登 录</button>
+  </div></div>
 <script>
-async function login() {
-  const res = await fetch('/api/login', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name_.value, password: password.value }),
-  });
-  const data = await res.json();
-  if (res.ok) location.href = '/';
-  else msg.innerHTML = `<span class="err">${data.error}</span>`;
+async function doLogin() {
+  const name = document.getElementById('name').value.trim();
+  const pass = document.getElementById('pass').value;
+  if (!name || !pass) { document.getElementById('err').textContent = '请输入账号和密码'; return; }
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, password: pass }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { document.getElementById('err').textContent = d.error || '登录失败'; return; }
+  location.href = '/index.html';
 }
-document.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
-// name 是全局变量陷阱规避
-const name_ = document.getElementById('name'), password = document.getElementById('password'),
-      msg = document.getElementById('msg');
 </script>
 </body>
 </html>
