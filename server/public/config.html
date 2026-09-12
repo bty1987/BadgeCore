@@ -190,7 +190,7 @@ let CURRENT_TAB = 0;
 function init() {
   if (!FIELDS[domain]) domain = 'violations';
   document.getElementById('top').innerHTML = adminTopbar('admin');
-  document.getElementById('side').innerHTML = adminSidebar(domain);
+  document.getElementById('side').innerHTML = adminSidebar(new URLSearchParams(location.search).get('group') || domain);
   loadMe();
   renderDomain();
 }
@@ -201,8 +201,10 @@ function switchDomain(d) {
 }
 function renderDomain() {
   const F = FIELDS[domain];
-  document.getElementById('side').innerHTML = adminSidebar(domain);
-  document.getElementById('d-title').textContent = F.label;
+  const group = new URLSearchParams(location.search).get('group');
+  document.getElementById('side').innerHTML = adminSidebar(group || domain);
+  const isPlanGroup = new URLSearchParams(location.search).get('group') === 'plans';
+  document.getElementById('d-title').textContent = isPlanGroup ? '沟通计划 · 字段设置' : F.label;
   const tabsEl = document.getElementById('tabs');
   if (F.tabs) {
     tabsEl.innerHTML = `<div class="tabbar">${F.tabs.map((t, i) =>

@@ -130,7 +130,7 @@ function adminSidebar(active, me) {
       ['violations', '违规检测', 'octagon', '/config.html?domain=violations'],
       ['competitors', '竞争对手', 'flag', '/config.html?domain=competitors'],
     ]],
-    ['沟通计划', 'calendar', [['plans', '字段设置', 'calendar', '/plans.html']]],
+    ['沟通计划', 'calendar', [['plans', '字段设置', 'calendar', '/config.html?domain=info_fields&group=plans']]],
     ['客户管理', 'users', [
       ['cust_list', '客户列表', 'users', '/customers.html'],
       ['cust_fields', '字段设置', 'file-text', '/config.html?domain=info_fields'],
