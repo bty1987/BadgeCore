@@ -1095,8 +1095,11 @@ function startScheduler() {
 }
 
 seed();
-// 入库令牌落盘（server/data/ 已 gitignore），供 start.bat 自动注入 receiver
-try { fs.writeFileSync(path.join(__dirname, 'data', 'ingest-token.txt'), getSetting(db, 'ingest_token')); } catch { /* 首次写失败不影响启动 */ }
+// 入库令牌落盘（server/data/ 已 gitignore），供 start.bat 自动注入 receiver。
+// ⚠️ 仅默认开发库可写——冒烟/临时库（DB_FILE 被覆盖时）严禁覆盖令牌文件，否则 receiver 会拿到错误令牌
+if (!process.env.DB_FILE) {
+  try { fs.writeFileSync(path.join(__dirname, 'data', 'ingest-token.txt'), getSetting(db, 'ingest_token')); } catch { /* 首次写失败不影响启动 */ }
+}
 try { const purged = runRetentionPurge(db); console.log(`[留存] 启动清理：音频 ${purged.audio}，转写 ${purged.transcripts}，报告 ${purged.reports}（180天/3年，CMP-08）`); } catch (e) { console.error('[留存] 启动清理失败:', e.message); }
 setInterval(() => { try { runRetentionPurge(db); } catch { /* 下轮再试 */ } }, 24 * 3600 * 1000).unref();
 setInterval(() => { try { checkSilence(); } catch (e) { console.error('[沉默预警]', e.message); } }, 3600 * 1000).unref(); // 风险预警·沉默型（D16）
