@@ -133,7 +133,9 @@ function openIatSession(cfg, { onText, onFinal, onError } = {}) {
     opened = true;
     ws.send(JSON.stringify({
       common: { app_id: cfg.appid },
-      business: { language: 'zh_cn', domain: 'iat', accent: 'mandarin', dwa: 'wpgs', ptt: 1 },
+      // eos=10000：后端点静默检测放宽到 10s——默认 2000ms 会在说话停顿时被服务端提前结束会话，
+      // 实时转写场景由 asr-live 层负责换段，减少无谓的会话重建
+      business: { language: 'zh_cn', domain: 'iat', accent: 'mandarin', dwa: 'wpgs', ptt: 1, eos: 10000 },
       data: { status: 0, format: 'audio/L16;rate=16000', encoding: 'raw', audio: '' },
     }));
     flush();

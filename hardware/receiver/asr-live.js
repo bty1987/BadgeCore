@@ -19,7 +19,7 @@ const RETRY_MS = 1000;
  * @param opts.onText(fullText)   累计全文有增量时触发（增量 ≥2 字才触发，避免刷屏）
  * @param opts.onNotice(msg)      运行状态/异常提示（不致命）
  */
-function createLiveTranscriber(cfg, { onText, onNotice } = {}) {
+function createLiveTranscriber(cfg, { onText, onNotice, sessionFactory = openIatSession } = {}) {
   const decoder = new OpusScript(16000, 1, OpusScript.Application.VOIP);
   let session = null;
   let started = false;
@@ -56,7 +56,7 @@ function createLiveTranscriber(cfg, { onText, onNotice } = {}) {
   function startSession() {
     sessionBytes = 0;
     rolling = false;
-    session = openIatSession(cfg, {
+    session = sessionFactory(cfg, {
       onText: t => emitCombined(t),
       onFinal: t => {
         fullText += t;
@@ -67,6 +67,10 @@ function createLiveTranscriber(cfg, { onText, onNotice } = {}) {
           startSession(); // 换段：新会话（startSession 内部会 drain pending）
         } else if (ended) {
           fireEnded();
+        } else {
+          // 修复（09-16 实测 bug）：讯飞 EOS 静默检测/服务端提前断开会带结果关闭会话，
+          // 设备仍在推流 → 必须立即重建会话续录，否则后续音频全部滞留 pending 丢失
+          startSession();
         }
       },
       onError: e => {

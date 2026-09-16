@@ -63,6 +63,8 @@
 | 5 | PyAV 18 (Win) 无法写输出文件 | `av.open('x.ogg','w')` 编码正常但不落盘（读正常） | 编码验证改走 Node opusscript；PyAV 只用于解码（decode-pcm.py） |
 | 6 | PyAV 18 逐帧 resample 累积填充 | 小帧（512 样本）逐帧重采样输出比期望多 8%~20% | 先拼成单个大帧再 resample + 末尾 `resample(None)` flush；planes[0] 有对齐填充必须按 `samples×2` 截断 |
 | 7 | Git Bash `kill $!` 杀不掉 node | 后台起的 node receiver.js 端口 8100 一直被占（EADDRINUSE） | `netstat -ano \| grep :8100` 找 PID → `taskkill //PID <pid> //F` |
+| 8 | 讯飞 EOS 静默提前结束听写会话 | 2.5min 三人会议仅转写前 14s（44 字），后续音频滞留 pending 全丢 | ①听写 business 加 eos=10000 放宽静默门限 ②asr-live onFinal 时设备未结束 → 立即重建会话续录（tools/test-asr-live.js 回归覆盖）；同场会议大模型分离转写 60+ 句/3 角色全部还原 |
+| 9 | 后台长驻进程代码陈旧 | 新端点（lfasr 回填等）报 401「未登录」/404 | 后台为长驻进程，**每次功能发版必须重启**；已重启并回填 comm#13/14 分离转写 |
 
 **串口日志方法**：PowerShell `System.IO.Ports.SerialPort` 打开 COM 口（115200），DTR/RTS 置真，监听重启输出。
 
