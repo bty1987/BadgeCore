@@ -1,0 +1,823 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8ae130c..ae25efc 100755
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -9,5 +9,5 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+ # "Trim" the build. Include the minimal set of components, main, and anything it depends on.
+ idf_build_set_property(MINIMAL_BUILD ON)
+ 
+-set(PROJECT_VER "2.5.0")
++set(PROJECT_VER "2.5.7")
+ project(xiaozhi)
+diff --git a/main/application.cc b/main/application.cc
+index 31de205..b29bf57 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -375,10 +375,47 @@ void Application::ActivationTask() {
+     // Initialize the protocol
+     InitializeProtocol();
+ 
++    // BadgeCore: periodic OTA refresh while idle — picks up identity text
++    // changes and self-hosted firmware upgrades within one tick.
++    esp_timer_create_args_t badge_timer_args = {};
++    badge_timer_args.callback = [](void* ctx) {
++        static_cast<Application*>(ctx)->Schedule([ctx]() {
++            static_cast<Application*>(ctx)->BadgeMaintenanceTick();
++        });
++    };
++    badge_timer_args.arg = this;
++    badge_timer_args.name = "badge_maint";
++    ESP_ERROR_CHECK(esp_timer_create(&badge_timer_args, &badge_maintenance_timer_));
++    ESP_ERROR_CHECK(esp_timer_start_periodic(badge_maintenance_timer_, 5LL * 60 * 1000000));
++
+     // Signal completion to main loop
+     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
+ }
+ 
++void Application::BadgeMaintenanceTick() {
++    // Only touch OTA when idle so upgrades never interrupt a conversation.
++    if (GetDeviceState() != kDeviceStateIdle) {
++        return;
++    }
++    if (!ota_) {
++        ota_ = std::make_unique<Ota>();
++    }
++    auto check = ota_->CheckVersion();
++    if (!check) {
++        ESP_LOGW(TAG, "[Badge] OTA refresh failed, will retry next tick");
++        return;
++    }
++    if (ota_->HasNewVersion()) {
++        auto display = Board::GetInstance().GetDisplay();
++        std::string notice =
++            std::string(Lang::Strings::UPGRADING) + " " + ota_->GetFirmwareVersion();
++        display->ShowNotification(notice.c_str(), 10000);
++        ESP_LOGI(TAG, "[Badge] New firmware %s, auto-upgrading",
++                 ota_->GetFirmwareVersion().c_str());
++        UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion());
++    }
++}
++
+ void Application::CheckAssetsVersion() {
+     // Only allow CheckAssetsVersion to be called once
+     if (assets_version_checked_) {
+@@ -690,6 +727,9 @@ void Application::InitializeProtocol() {
+                     ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
+                 }
+             }
++        } else if (strcmp(type->valuestring, "identity") == 0) {
++            // BadgeCore: live badge identity push over the audio channel.
++            SetBadgeIdentityFromJson(root);
+         } else if (strcmp(type->valuestring, "alert") == 0) {
+             auto status = cJSON_GetObjectItem(root, "status");
+             auto message = cJSON_GetObjectItem(root, "message");
+diff --git a/main/application.h b/main/application.h
+index f2b9a00..80a3080 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -135,6 +135,7 @@ private:
+     std::unique_ptr<Protocol> protocol_;
+     EventGroupHandle_t event_group_ = nullptr;
+     esp_timer_handle_t clock_timer_handle_ = nullptr;
++    esp_timer_handle_t badge_maintenance_timer_ = nullptr;
+     DeviceStateMachine state_machine_;
+     ListeningMode listening_mode_ = kListeningModeAutoStop;
+     AecMode aec_mode_ = kAecOff;
+@@ -180,6 +181,7 @@ private:
+     void CheckAssetsVersion();
+     void CheckNewVersion();
+     void InitializeProtocol();
++    void BadgeMaintenanceTick();
+     void ShowActivationCode(const std::string& code, const std::string& message);
+     void SetListeningMode(ListeningMode mode);
+     ListeningMode GetDefaultListeningMode() const;
+diff --git a/main/boards/folotoy/ai-passport/ai_passport_board.cc b/main/boards/folotoy/ai-passport/ai_passport_board.cc
+index 281780c..41be6b3 100644
+--- a/main/boards/folotoy/ai-passport/ai_passport_board.cc
++++ b/main/boards/folotoy/ai-passport/ai_passport_board.cc
+@@ -6,9 +6,13 @@
+ #include "config.h"
+ #include "assets/lang_config.h"
+ #include "cw2017_battery_monitor.h"
++#include "ota.h"
++#include "lvgl_theme.h"
+ 
+ #include <esp_log.h>
+ #include <esp_lcd_panel_vendor.h>
++#include <atomic>
++#include <cstdio>
+ #include <button_adc.h>
+ #include <esp_adc/adc_oneshot.h>
+ #include <driver/i2c_master.h>
+@@ -18,6 +22,229 @@
+ 
+ #define TAG "AiPassport"
+ 
++// Badge mode: whenever the server has pushed identity data (Ota "identity"
++// section or WS message), show a persistent name-badge face — structured
++// fields render as a hierarchy (name, dim id/title, divider, company), plain
++// text renders as-is. The face stays up during conversations; a red recording
++// indicator with elapsed time sits at the bottom-left and the battery
++// percentage at the bottom-right. The robot avatar is made permanently
++// invisible.
++class AiPassportDisplay : public SpiLcdDisplay {
++public:
++    using SpiLcdDisplay::SpiLcdDisplay;
++
++    void SetupUI() override {
++        SpiLcdDisplay::SetupUI();
++        DisplayLockGuard lock(this);
++
++        // Badge mode: no robot avatar. Keep the upstream-owned objects alive —
++        // LcdDisplay::SetTheme styles emoji_label_ without a null check, so
++        // deleting it crashes the next theme refresh (boot loop via OTA
++        // rollback). Hide + full transparency instead: SetEmotion may unhide
++        // the label, but opacity keeps it invisible in every state.
++        if (emoji_label_ != nullptr) {
++            lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
++            lv_obj_set_style_opa(emoji_label_, LV_OPA_TRANSP, 0);
++        }
++        if (emoji_image_ != nullptr) {
++            lv_obj_set_style_opa(emoji_image_, LV_OPA_TRANSP, 0);
++        }
++
++        auto screen = lv_screen_active();
++        auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
++        lv_color_t text_color = lvgl_theme->text_color();
++
++        // Free-text badge face (fallback when no structured name is given).
++        identity_label_ = lv_label_create(screen);
++        lv_obj_set_width(identity_label_, LV_HOR_RES - 24);
++        lv_label_set_long_mode(identity_label_, LV_LABEL_LONG_WRAP);
++        lv_obj_set_style_text_align(identity_label_, LV_TEXT_ALIGN_CENTER, 0);
++        lv_obj_align(identity_label_, LV_ALIGN_CENTER, 0, -10);
++        lv_label_set_text(identity_label_, "");
++        lv_obj_add_flag(identity_label_, LV_OBJ_FLAG_HIDDEN);
++
++        // Structured badge face: name over dim id/title, divider, company.
++        // Name uses the runtime theme font (common charset — renders any
++        // Chinese name). The 30px built-in font only covers the basic charset
++        // (no arbitrary hanzi) and the full 30px common font (2.5MB) exceeds
++        // the 2MB assets partition, so hierarchy is expressed via opacity and
++        // letter spacing rather than glyph size.
++        name_label_ = lv_label_create(screen);
++        lv_obj_set_style_text_letter_space(name_label_, 4, 0);
++        lv_obj_set_style_text_align(name_label_, LV_TEXT_ALIGN_CENTER, 0);
++        lv_obj_align(name_label_, LV_ALIGN_CENTER, 0, -22);
++        lv_label_set_text(name_label_, "");
++        lv_obj_add_flag(name_label_, LV_OBJ_FLAG_HIDDEN);
++
++        sub_label_ = lv_label_create(screen);
++        lv_obj_set_style_text_align(sub_label_, LV_TEXT_ALIGN_CENTER, 0);
++        lv_obj_set_style_text_opa(sub_label_, LV_OPA_60, 0);
++        lv_obj_align(sub_label_, LV_ALIGN_CENTER, 0, 22);
++        lv_label_set_text(sub_label_, "");
++        lv_obj_add_flag(sub_label_, LV_OBJ_FLAG_HIDDEN);
++
++        divider_ = lv_obj_create(screen);
++        lv_obj_set_size(divider_, 120, 1);
++        lv_obj_set_style_bg_color(divider_, text_color, 0);
++        lv_obj_set_style_bg_opa(divider_, LV_OPA_30, 0);
++        lv_obj_set_style_border_width(divider_, 0, 0);
++        lv_obj_set_style_radius(divider_, 0, 0);
++        lv_obj_align(divider_, LV_ALIGN_CENTER, 0, 58);
++        lv_obj_add_flag(divider_, LV_OBJ_FLAG_HIDDEN);
++
++        company_label_ = lv_label_create(screen);
++        lv_obj_set_style_text_align(company_label_, LV_TEXT_ALIGN_CENTER, 0);
++        lv_obj_set_style_text_opa(company_label_, LV_OPA_50, 0);
++        lv_obj_align(company_label_, LV_ALIGN_CENTER, 0, 76);
++        lv_label_set_text(company_label_, "");
++        lv_obj_add_flag(company_label_, LV_OBJ_FLAG_HIDDEN);
++
++        // Bottom status band: recording indicator (red dot + elapsed time) at
++        // the bottom-left, battery percentage at the bottom-right.
++        rec_dot_ = lv_obj_create(screen);
++        lv_obj_set_size(rec_dot_, 10, 10);
++        lv_obj_set_style_radius(rec_dot_, LV_RADIUS_CIRCLE, 0);
++        lv_obj_set_style_bg_color(rec_dot_, lv_color_hex(0xE53935), 0);
++        lv_obj_set_style_border_width(rec_dot_, 0, 0);
++        lv_obj_align(rec_dot_, LV_ALIGN_BOTTOM_LEFT, 8, -12);
++        lv_obj_add_flag(rec_dot_, LV_OBJ_FLAG_HIDDEN);
++
++        rec_label_ = lv_label_create(screen);
++        lv_obj_set_style_text_color(rec_label_, lv_color_hex(0xE53935), 0);
++        lv_obj_align(rec_label_, LV_ALIGN_BOTTOM_LEFT, 24, -6);
++        lv_label_set_text(rec_label_, "");
++        lv_obj_add_flag(rec_label_, LV_OBJ_FLAG_HIDDEN);
++
++        batt_label_ = lv_label_create(screen);
++        lv_obj_set_style_text_color(batt_label_, text_color, 0);
++        lv_obj_set_style_text_opa(batt_label_, LV_OPA_70, 0);
++        lv_obj_align(batt_label_, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
++        lv_label_set_text(batt_label_, "");
++        lv_obj_add_flag(batt_label_, LV_OBJ_FLAG_HIDDEN);
++
++        esp_timer_create_args_t timer_args = {};
++        timer_args.callback = [](void* ctx) {
++            static_cast<AiPassportDisplay*>(ctx)->RefreshDisplay();
++        };
++        timer_args.arg = this;
++        timer_args.name = "badge_refresh";
++        ESP_ERROR_CHECK(esp_timer_create(&timer_args, &refresh_timer_));
++        ESP_ERROR_CHECK(esp_timer_start_periodic(refresh_timer_, 500 * 1000));
++    }
++
++private:
++    lv_obj_t* identity_label_ = nullptr;
++    lv_obj_t* name_label_ = nullptr;
++    lv_obj_t* sub_label_ = nullptr;
++    lv_obj_t* divider_ = nullptr;
++    lv_obj_t* company_label_ = nullptr;
++    lv_obj_t* rec_dot_ = nullptr;
++    lv_obj_t* rec_label_ = nullptr;
++    lv_obj_t* batt_label_ = nullptr;
++    esp_timer_handle_t refresh_timer_ = nullptr;
++    std::string shown_text_;
++    bool badge_shown_ = false;
++    bool rec_shown_ = false;
++    int64_t rec_start_us_ = 0;
++
++    void SetHidden(lv_obj_t* obj, bool hidden) {
++        if (obj == nullptr) {
++            return;
++        }
++        if (hidden) {
++            lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
++        } else {
++            lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
++        }
++    }
++
++    void RefreshDisplay() {
++        auto& app = Application::GetInstance();
++        DeviceState state = app.GetDeviceState();
++        // Badge face stays visible in the working states (idle + conversation)
++        // so the employee info never disappears while recording; system phases
++        // (boot/activation/upgrade) still own the screen.
++        bool badge_state = state == kDeviceStateIdle || state == kDeviceStateListening ||
++                           state == kDeviceStateSpeaking;
++        bool recording = state == kDeviceStateListening || state == kDeviceStateSpeaking;
++        BadgeIdentity bi = GetBadgeIdentity();
++        bool want_badge = badge_state && bi.valid;
++
++        DisplayLockGuard lock(this);
++
++        // Badge face (persistent in working states).
++        if (!want_badge) {
++            if (badge_shown_) {
++                badge_shown_ = false;
++                SetHidden(identity_label_, true);
++                SetHidden(name_label_, true);
++                SetHidden(sub_label_, true);
++                SetHidden(divider_, true);
++                SetHidden(company_label_, true);
++            }
++        } else if (!badge_shown_ || bi.text != shown_text_) {
++            badge_shown_ = true;
++            shown_text_ = bi.text;
++            bool structured = !bi.name.empty();
++            SetHidden(identity_label_, structured);
++            SetHidden(name_label_, !structured);
++            SetHidden(sub_label_, !structured);
++            SetHidden(divider_, !(structured && !bi.company.empty()));
++            SetHidden(company_label_, !(structured && !bi.company.empty()));
++            if (structured) {
++                lv_label_set_text(name_label_, bi.name.c_str());
++                std::string sub;
++                if (!bi.employee_id.empty()) {
++                    sub += bi.employee_id;
++                }
++                if (!bi.title.empty()) {
++                    if (!sub.empty()) {
++                        sub += "\n";
++                    }
++                    sub += bi.title;
++                }
++                lv_label_set_text(sub_label_, sub.c_str());
++                lv_label_set_text(company_label_, bi.company.c_str());
++            } else {
++                lv_label_set_text(identity_label_, bi.text.c_str());
++            }
++        }
++
++        // Recording indicator with elapsed time (bottom-left).
++        if (!recording) {
++            if (rec_shown_) {
++                rec_shown_ = false;
++                SetHidden(rec_dot_, true);
++                SetHidden(rec_label_, true);
++            }
++        } else {
++            int64_t now = esp_timer_get_time();
++            if (!rec_shown_) {
++                rec_shown_ = true;
++                rec_start_us_ = now;
++            }
++            int elapsed = (int)((now - rec_start_us_) / 1000000LL);
++            char buf[32];
++            snprintf(buf, sizeof(buf), "%02d:%02d", elapsed / 60, elapsed % 60);
++            lv_label_set_text(rec_label_, buf);
++            SetHidden(rec_dot_, false);
++            SetHidden(rec_label_, false);
++        }
++
++        // Battery percentage (bottom-right), read from the CW2017 fuel gauge.
++        int level = 0;
++        bool charging = false, discharging = false;
++        if (Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
++            char buf[16];
++            snprintf(buf, sizeof(buf), "%d%%", level);
++            lv_label_set_text(batt_label_, buf);
++            SetHidden(batt_label_, false);
++        } else {
++            SetHidden(batt_label_, true);
++        }
++    }
++};
++
+ // Physical keys share one ADC pin through a resistor ladder (see config.h).
+ enum {
+     kAdcButtonUp = 0,
+@@ -33,6 +260,12 @@ private:
+     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
+     LcdDisplay* display_;
+     Cw2017BatteryMonitor* battery_;
++    std::atomic<bool> screen_slept_{false};
++    PowerSaveLevel last_level_ = PowerSaveLevel::LOW_POWER;
++    int idle_seconds_ = 0;
++    int battery_log_seconds_ = 0;
++    bool after_conversation_ = false;
++    esp_timer_handle_t screen_off_timer_ = nullptr;
+ 
+     void InitializeCodecI2c() {
+         i2c_master_bus_config_t i2c_bus_cfg = {
+@@ -111,11 +344,14 @@ private:
+ 
+         // Button callbacks run on the button task; schedule all UI/audio
+         // work onto the main task so LVGL and codec access stay on one thread.
++        // While the screen is slept, any key only wakes the display.
+         auto up = adc_button_[kAdcButtonUp];
+         up->OnClick([this]() {
++            if (ConsumeWakeKey()) return;
+             Application::GetInstance().Schedule([this]() { ChangeVolume(10); });
+         });
+         up->OnLongPress([this]() {
++            if (ConsumeWakeKey()) return;
+             Application::GetInstance().Schedule([this]() {
+                 GetAudioCodec()->SetOutputVolume(100);
+                 GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+@@ -124,9 +360,11 @@ private:
+ 
+         auto down = adc_button_[kAdcButtonDown];
+         down->OnClick([this]() {
++            if (ConsumeWakeKey()) return;
+             Application::GetInstance().Schedule([this]() { ChangeVolume(-10); });
+         });
+         down->OnLongPress([this]() {
++            if (ConsumeWakeKey()) return;
+             Application::GetInstance().Schedule([this]() {
+                 GetAudioCodec()->SetOutputVolume(0);
+                 GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+@@ -135,8 +373,16 @@ private:
+ 
+         auto ok = adc_button_[kAdcButtonOk];
+         ok->OnClick([this]() {
++            if (ConsumeWakeKey()) return;
+             Application::GetInstance().Schedule([this]() { ToggleChat(); });
+         });
++        // OK long-press: toggle screen sleep (manual alternative to the auto
++        // screen-off; the hardware power key is not readable by the MCU).
++        ok->OnLongPress([this]() {
++            Application::GetInstance().Schedule([this]() {
++                SetScreenSleep(!screen_slept_.load());
++            });
++        });
+     }
+ 
+     void InitializeSpi() {
+@@ -210,10 +456,10 @@ private:
+         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+         esp_lcd_panel_disp_on_off(panel, true);
+ 
+-        display_ = new SpiLcdDisplay(panel_io, panel,
+-                                     DISPLAY_WIDTH, DISPLAY_HEIGHT,
+-                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+-                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
++        display_ = new AiPassportDisplay(panel_io, panel,
++                                         DISPLAY_WIDTH, DISPLAY_HEIGHT,
++                                         DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
++                                         DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+     }
+ 
+ public:
+@@ -222,6 +468,7 @@ public:
+         InitializeSpi();
+         InitializeDisplay();
+         InitializeButtons();
++        InitializeScreenOffTimer();
+         GetBacklight()->RestoreBrightness();
+     }
+ 
+@@ -250,6 +497,94 @@ public:
+         return &backlight;
+     }
+ 
++    // Badge backlight policy: the application raises PERFORMANCE whenever there
++    // is user-visible activity (conversation, notifications) and drops back to
++    // LOW_POWER when idle — dim the panel accordingly. Manual/auto screen sleep
++    // (screen_slept_) overrides everything: backlight 0 while the device keeps
++    // running; any function key wakes it.
++    virtual void SetPowerSaveLevel(PowerSaveLevel level) override {
++        WifiBoard::SetPowerSaveLevel(level);
++        last_level_ = level;
++        ApplyBacklight();
++    }
++
++    bool IsScreenSlept() const { return screen_slept_.load(); }
++
++    void SetScreenSleep(bool sleep) {
++        if (screen_slept_.exchange(sleep) == sleep) {
++            return;
++        }
++        idle_seconds_ = 0;
++        after_conversation_ = false;
++        ApplyBacklight();
++        ESP_LOGI(TAG, "Screen %s", sleep ? "sleep (device keeps running)" : "wake");
++    }
++
++    // Returns true when the key press was consumed as a wake gesture.
++    bool ConsumeWakeKey() {
++        if (!screen_slept_.load()) {
++            return false;
++        }
++        Application::GetInstance().Schedule([this]() { SetScreenSleep(false); });
++        return true;
++    }
++
++    void ApplyBacklight() {
++        auto backlight = GetBacklight();
++        if (screen_slept_.load()) {
++            backlight->SetBrightness(0);
++            return;
++        }
++        backlight->SetBrightness(last_level_ == PowerSaveLevel::PERFORMANCE
++                                     ? BADGE_BRIGHTNESS_ACTIVE
++                                     : BADGE_BRIGHTNESS_IDLE);
++    }
++
++    void InitializeScreenOffTimer() {
++        esp_timer_create_args_t args = {};
++        args.callback = [](void* ctx) {
++            static_cast<AiPassportBoard*>(ctx)->AutoScreenOffTick();
++        };
++        args.arg = this;
++        args.name = "badge_scr_off";
++        ESP_ERROR_CHECK(esp_timer_create(&args, &screen_off_timer_));
++        ESP_ERROR_CHECK(esp_timer_start_periodic(screen_off_timer_, 1000 * 1000));
++    }
++
++    void AutoScreenOffTick() {
++        // Hourly battery journal (CW2017 SOC + uptime) for discharge analysis.
++        if (++battery_log_seconds_ >= 3600) {
++            battery_log_seconds_ = 0;
++            int level = 0;
++            bool chg = false, dis = false;
++            if (GetBatteryLevel(level, chg, dis)) {
++                ESP_LOGI(TAG, "[Battery] %d%%%s uptime=%ds", level, chg ? " charging" : "",
++                         (int)(esp_timer_get_time() / 1000000LL));
++            }
++        }
++
++        if (BADGE_SCREEN_OFF_AFTER_SECONDS <= 0 || screen_slept_.load()) {
++            return;
++        }
++        auto state = Application::GetInstance().GetDeviceState();
++        if (state == kDeviceStateListening || state == kDeviceStateSpeaking) {
++            after_conversation_ = true;  // conversation just ended -> faster fuse
++            idle_seconds_ = 0;
++            return;
++        }
++        if (state != kDeviceStateIdle) {
++            idle_seconds_ = 0;
++            return;
++        }
++        ++idle_seconds_;
++        int threshold = after_conversation_ ? BADGE_SCREEN_OFF_AFTER_CONVERSATION_SECONDS
++                                            : BADGE_SCREEN_OFF_AFTER_SECONDS;
++        if (idle_seconds_ >= threshold) {
++            after_conversation_ = false;
++            SetScreenSleep(true);
++        }
++    }
++
+     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+         if (!battery_ || !battery_->IsPresent()) {
+             return false;
+diff --git a/main/boards/folotoy/ai-passport/config.h b/main/boards/folotoy/ai-passport/config.h
+index 8e346eb..961c835 100644
+--- a/main/boards/folotoy/ai-passport/config.h
++++ b/main/boards/folotoy/ai-passport/config.h
+@@ -74,4 +74,19 @@
+ // CW2017 fuel gauge shares the codec I2C bus.
+ #define BATTERY_CW2017_ADDR 0x63
+ 
++// ============================================================================
++// Badge backlight policy (BadgeCore): the framework drives SetPowerSaveLevel —
++// PERFORMANCE on conversation/notification activity, LOW_POWER when idle.
++// Brightness is percent 0-100 (PwmBacklight maps to 10-bit LEDC duty).
++// ============================================================================
++#define BADGE_BRIGHTNESS_ACTIVE 100  // talking / notification / volume popup
++#define BADGE_BRIGHTNESS_IDLE 25     // idle badge face (identity text stays readable)
++
++// Auto screen-off: after this many seconds of continuous idle the backlight
++// goes to 0 (device keeps running — WiFi/recording/OTA unaffected). Any
++// function key wakes the screen; OK long-press toggles sleep manually.
++#define BADGE_SCREEN_OFF_AFTER_SECONDS 60  // 0 = disabled
++// Right after a conversation ends the screen goes off sooner.
++#define BADGE_SCREEN_OFF_AFTER_CONVERSATION_SECONDS 30
++
+ #endif // _BOARD_CONFIG_H_
+diff --git a/main/display/lcd_display.cc b/main/display/lcd_display.cc
+index 3462ac0..06c6a88 100644
+--- a/main/display/lcd_display.cc
++++ b/main/display/lcd_display.cc
+@@ -460,6 +460,15 @@ void LcdDisplay::SetupUI() {
+     lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
+     lv_obj_set_style_margin_left(battery_label_, lvgl_theme->spacing(2), 0);
+ 
++    /* BadgeCore: optional numeric battery percentage next to the icon */
++    if (show_battery_percent_) {
++        battery_pct_label_ = lv_label_create(right_icons);
++        lv_label_set_text(battery_pct_label_, "");
++        lv_obj_set_style_text_font(battery_pct_label_, text_font, 0);
++        lv_obj_set_style_text_color(battery_pct_label_, lvgl_theme->text_color(), 0);
++        lv_obj_set_style_margin_left(battery_pct_label_, lvgl_theme->spacing(1), 0);
++    }
++
+     /* Layer 2: Status bar - for center text labels */
+     status_bar_ = lv_obj_create(screen);
+     lv_obj_set_size(status_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
+@@ -947,6 +956,15 @@ void LcdDisplay::SetupUI() {
+     lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
+     lv_obj_set_style_margin_left(battery_label_, lvgl_theme->spacing(2), 0);
+ 
++    /* BadgeCore: optional numeric battery percentage next to the icon */
++    if (show_battery_percent_) {
++        battery_pct_label_ = lv_label_create(right_icons);
++        lv_label_set_text(battery_pct_label_, "");
++        lv_obj_set_style_text_font(battery_pct_label_, text_font, 0);
++        lv_obj_set_style_text_color(battery_pct_label_, lvgl_theme->text_color(), 0);
++        lv_obj_set_style_margin_left(battery_pct_label_, lvgl_theme->spacing(1), 0);
++    }
++
+     /* Layer 2: Status bar - for center text labels */
+     status_bar_ = lv_obj_create(screen);
+     lv_obj_set_size(status_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
+diff --git a/main/display/lvgl_display/lvgl_display.cc b/main/display/lvgl_display/lvgl_display.cc
+index 12a887e..0f42995 100644
+--- a/main/display/lvgl_display/lvgl_display.cc
++++ b/main/display/lvgl_display/lvgl_display.cc
+@@ -135,6 +135,9 @@ LvglDisplay::~LvglDisplay() {
+     if (battery_label_ != nullptr) {
+         lv_obj_del(battery_label_);
+     }
++    if (battery_pct_label_ != nullptr) {
++        lv_obj_del(battery_pct_label_);
++    }
+     if (low_battery_popup_ != nullptr) {
+         lv_obj_del(low_battery_popup_);
+     }
+@@ -263,6 +266,10 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
+             battery_icon_ = icon;
+             lv_label_set_text(battery_label_, battery_icon_);
+         }
++        // BadgeCore: numeric percentage next to the battery icon
++        if (battery_pct_label_ != nullptr) {
++            lv_label_set_text_fmt(battery_pct_label_, "%d%%", battery_level);
++        }
+ 
+         // Check low battery popup only when clock tick event is triggered
+         // Because when initializing, the battery level is not ready yet.
+diff --git a/main/display/lvgl_display/lvgl_display.h b/main/display/lvgl_display/lvgl_display.h
+index 465e020..9979768 100644
+--- a/main/display/lvgl_display/lvgl_display.h
++++ b/main/display/lvgl_display/lvgl_display.h
+@@ -33,6 +33,10 @@ public:
+     virtual bool SetTextFont(std::shared_ptr<LvglFont> text_font) override;
+     virtual bool SupportsGuiOperations() const override { return true; }
+ 
++    // BadgeCore: render the numeric battery percentage next to the icon.
++    // Must be called before SetupUI().
++    void SetBatteryPercentEnabled(bool on) { show_battery_percent_ = on; }
++
+ protected:
+     esp_pm_lock_handle_t pm_lock_ = nullptr;
+     lv_display_t* display_ = nullptr;
+@@ -42,6 +46,8 @@ protected:
+     lv_obj_t* notification_label_ = nullptr;
+     lv_obj_t* mute_label_ = nullptr;
+     lv_obj_t* battery_label_ = nullptr;
++    lv_obj_t* battery_pct_label_ = nullptr;
++    bool show_battery_percent_ = false;
+     lv_obj_t* low_battery_popup_ = nullptr;
+     lv_obj_t* low_battery_label_ = nullptr;
+ 
+diff --git a/main/ota.cc b/main/ota.cc
+index 07d5116..a8b4e53 100644
+--- a/main/ota.cc
++++ b/main/ota.cc
+@@ -7,6 +7,7 @@
+ #include <freertos/task.h>
+ #include <cJSON.h>
+ #include <esp_log.h>
++#include <esp_system.h>
+ #include <esp_partition.h>
+ #include <esp_ota_ops.h>
+ #include <esp_app_format.h>
+@@ -21,11 +22,86 @@
+ #include <charconv>
+ #include <cstring>
+ #include <expected>
++#include <mutex>
+ #include <system_error>
+ #include <vector>
+ 
+ #define TAG "Ota"
+ 
++static std::mutex g_identity_mutex;
++static BadgeIdentity g_badge_identity;
++
++BadgeIdentity GetBadgeIdentity() {
++    std::lock_guard<std::mutex> lock(g_identity_mutex);
++    return g_badge_identity;
++}
++
++static std::string GetObjString(const cJSON* obj, const char* field) {
++    const cJSON* item = cJSON_GetObjectItem(obj, field);
++    return (cJSON_IsString(item) && item->valuestring[0] != '\0') ? std::string(item->valuestring)
++                                                                  : std::string();
++}
++
++static void ApplyBadgeIdentity(const BadgeIdentity& bi) {
++    {
++        std::lock_guard<std::mutex> lock(g_identity_mutex);
++        if (bi.valid && bi.text == g_badge_identity.text &&
++            bi.company == g_badge_identity.company) {
++            return;  // unchanged
++        }
++        g_badge_identity = bi;
++    }
++    // Persist as a small JSON object (NVS, survives reboots).
++    cJSON* root = cJSON_CreateObject();
++    auto add = [&root](const char* key, const std::string& value) {
++        if (!value.empty()) {
++            cJSON_AddStringToObject(root, key, value.c_str());
++        }
++    };
++    add("text", bi.text);
++    add("name", bi.name);
++    add("employee_id", bi.employee_id);
++    add("title", bi.title);
++    add("company", bi.company);
++    char* printed = cJSON_PrintUnformatted(root);
++    std::string json = printed != nullptr ? printed : "";
++    cJSON_free(printed);
++    cJSON_Delete(root);
++    if (!json.empty()) {
++        Settings settings("identity", true);
++        settings.SetString("json", json);
++    }
++    ESP_LOGI(TAG, "Badge identity updated (%d bytes)", (int)json.size());
++}
++
++void SetBadgeIdentityFromJson(const cJSON* obj) {
++    if (!cJSON_IsObject(obj)) {
++        return;
++    }
++    BadgeIdentity bi;
++    bi.text = GetObjString(obj, "text");
++    bi.name = GetObjString(obj, "name");
++    bi.employee_id = GetObjString(obj, "employee_id");
++    bi.title = GetObjString(obj, "title");
++    bi.company = GetObjString(obj, "company");
++
++    // Assemble the free-form fallback text from structured fields.
++    if (bi.text.empty()) {
++        const std::string* kLines[] = {&bi.name, &bi.employee_id, &bi.title};
++        for (const std::string* line : kLines) {
++            if (!line->empty()) {
++                if (!bi.text.empty()) {
++                    bi.text += "\n";
++                }
++                bi.text += *line;
++            }
++        }
++    }
++    bi.valid = !bi.text.empty();
++    ApplyBadgeIdentity(bi);
++}
++
++
+ 
+ Ota::Ota() {
+ #ifdef ESP_EFUSE_BLOCK_USR_DATA
+@@ -40,6 +116,31 @@ Ota::Ota() {
+         }
+     }
+ #endif
++    // Restore persisted badge identity: structured JSON first, legacy text fallback.
++    {
++        Settings settings("identity");
++        std::string json = settings.GetString("json");
++        if (!json.empty()) {
++            cJSON* root = cJSON_Parse(json.c_str());
++            if (root != nullptr) {
++                std::lock_guard<std::mutex> lock(g_identity_mutex);
++                g_badge_identity.text = GetObjString(root, "text");
++                g_badge_identity.name = GetObjString(root, "name");
++                g_badge_identity.employee_id = GetObjString(root, "employee_id");
++                g_badge_identity.title = GetObjString(root, "title");
++                g_badge_identity.company = GetObjString(root, "company");
++                g_badge_identity.valid = !g_badge_identity.text.empty();
++                cJSON_Delete(root);
++            }
++        } else {
++            std::string legacy = settings.GetString("text");
++            if (!legacy.empty()) {
++                std::lock_guard<std::mutex> lock(g_identity_mutex);
++                g_badge_identity.text = legacy;
++                g_badge_identity.valid = true;
++            }
++        }
++    }
+ }
+ 
+ Ota::~Ota() {
+@@ -70,6 +171,19 @@ std::unique_ptr<Http> Ota::SetupHttp() {
+     http->SetHeader("Accept-Language", Lang::CODE);
+     http->SetHeader("Content-Type", "application/json");
+ 
++    // BadgeCore heartbeat piggyback: the server harvests device health from
++    // these headers on every version check (boot + idle maintenance tick).
++    {
++        int level = 0;
++        bool charging = false, discharging = false;
++        if (Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
++            http->SetHeader("X-Battery", std::to_string(level));
++            http->SetHeader("X-Charging", charging ? "1" : "0");
++        }
++        http->SetHeader("X-Uptime", std::to_string((int)(esp_timer_get_time() / 1000000LL)));
++        http->SetHeader("X-Heap-Free", std::to_string(esp_get_free_heap_size()));
++    }
++
+     return http;
+ }
+ 
+@@ -215,6 +329,9 @@ NetworkResult<> Ota::CheckVersion() {
+         ESP_LOGW(TAG, "No server_time section found!");
+     }
+ 
++    // Badge identity: server-owned display content for badge-style boards.
++    SetBadgeIdentityFromJson(cJSON_GetObjectItem(root, "identity"));
++
+     has_new_version_ = false;
+     cJSON *firmware = cJSON_GetObjectItem(root, "firmware");
+     if (cJSON_IsObject(firmware)) {
+diff --git a/main/ota.h b/main/ota.h
+index eda3fd7..a9eb0cb 100644
+--- a/main/ota.h
++++ b/main/ota.h
+@@ -6,6 +6,7 @@
+ #include <string>
+ #include <vector>
+ 
++#include <cJSON.h>
+ #include <esp_err.h>
+ #include "board.h"
+ #include "network_error.h"
+@@ -58,4 +59,24 @@ private:
+     std::unique_ptr<Http> SetupHttp();
+ };
+ 
++// Badge identity delivered by the server via the OTA "identity" section or the
++// WS {"type":"identity", ...} message. Supported fields: text (free-form
++// fallback) or name / employee_id / title / company (structured badge layout).
++// Persisted in NVS across reboots; board UIs render it while the device is idle.
++struct BadgeIdentity {
++    bool valid = false;
++    std::string text;  // free-form fallback (also auto-assembled from fields)
++    std::string name;
++    std::string employee_id;
++    std::string title;
++    std::string company;
++};
++
++// Returns a copy (written by the OTA/protocol task, read by the LVGL task).
++BadgeIdentity GetBadgeIdentity();
++
++// Extract fields from a JSON object (the identity section itself, or the WS
++// message root) and store them; no-op when nothing changed.
++void SetBadgeIdentityFromJson(const cJSON* obj);
++
+ #endif // _OTA_H

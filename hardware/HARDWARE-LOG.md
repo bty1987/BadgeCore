@@ -18,6 +18,26 @@
 | 日期 | 物品 | 价格 | 渠道 | 用途 | 状态 |
 |---|---|---|---|---|---|
 | 2026-09-07 | 微雪 ESP32-S3-Touch-AMOLED-1.75C（双麦阵列/1.75″圆屏AMOLED/BLE5/WiFi/锂电管理/铝壳） | ¥220 | 微雪官方 | 软件全链路开发载体：录音采集→降噪→OPUS 推流→云端管道；BLE 连 App 协议开发 | ✅ 已验收（09-10） |
+| 2026-09-21 | FoloToy AI Passport（TRAE 联名③号板：ESP32-C3/8MB/ST7789 240×320 无触摸/ES8311/NTAG213 NFC/三按键/520mAh） | ¥99 | FoloToy 官方淘宝 | 第二卡片候选（P4 板级适配）+C3 路线验证机：出厂固件已全量备份，待体验原厂→试刷 | ✅ 已刷小智自编译固件（09-23） |
+
+### ③ FoloToy AI Passport 小智试驾（2026-09-23，✅ 编译/烧录/启动全通）
+
+- **v2.5.1 三件套上线（2026-09-24，全实测）**：①背光自动策略（挂框架 SetPowerSaveLevel：活动 100%/空闲 25%，config.h 常量可调；另发现 MCP 自带 `self.screen.set_brightness` 可语音调亮度）②身份实时推送（WS `type:"identity"` 消息秒换显 + receiver watch 配置文件目录保存即广播）③OTA 自分发（receiver 伺服 `receiver/firmware/xiaozhi-<版本>.bin`，设备开机+空闲每 5 分钟自检自动升级——2.5.1 烧录后 +5:00 整首检实测，同版本严格不重升）。发版流程=改 CMakeLists PROJECT_VER→build→bin 改名入 firmware/。补丁 7 文件 +207 行。
+- **上游主线已内置 `folotoy/ai-passport` 板定义**（xiaozhi-esp32 v2.5.0，ST7789P3 init 序列/ES8311/ADC 三键/CW2017 电量计全齐），要求 IDF ≥v6.0.1
+- 本机 IDF v6.1 环境落在 `D:\Espressif`（独立目录）：py312 + esp-idf release/v6.1 + 工具链 5.9GB；GitHub 走 ghfast.top 代理、pip 走清华镜像、gitee 缺失子模块按 pinned SHA 从代理手补（坑位表见试驾文档 §0）
+- **身份显示定制**（我们的第一个固件补丁，`hardware/firmware/xiaozhi-passport-badge-identity.patch`，3 文件 +115 行）：OTA 响应新增 `identity` 段 → NVS 持久化 → 空闲时屏幕显示身份文字（替代机器人图标），对话自动回原 UI；**改内容只改 receiver 的 badge-identity.json，免重刷固件**；receiver v0.3+ 已带此功能（OTA 响应实测含字段）
+- 实测：`xiaozhi.bin` 2.35MB 烧录成功（哈希校验过）→ 串口见 `Board: UUID=… SKU=ai-passport`、`AudioCodec`（ES8311）初始化、free sram ~86KB 稳定
+- 待办：配网（Xiaozhi-XXXX 热点 → 192.168.4.1 → WiFi+OTA 填 `http://192.168.5.93:8100/xiaozhi/ota/`）→ 验证身份屏/对话/三键/电量/NVS 保持
+- 救砖底线：原厂 8MB 备份在 `tools/firmware-backup/`（`esptool write_flash 0x0 <备份>` 一条命令回原厂）
+
+### ③ FoloToy AI Passport 首连识别（2026-09-23）
+
+- 枚举：`VID_303A&PID_1001`（ESP32-C3 内置 USB-Serial/JTAG）→ COM8；esptool 自动 RTS 复位进下载模式，**免手动 BOOT、免驱动**（Win11 即插即用）
+- 芯片：ESP32-C3 QFN32 rev v1.1（Wi-Fi+BT5LE/160MHz 单核），内嵌 XMC 8MB Flash，40MHz 晶振，MAC `4c:11:ae:2f:94:38`
+- 出厂固件：`trae_card` v1.0.3（ESP-IDF v5.5.3，编译于 2026-09-07），LVGL + ADC 三按键，背光 GPIO21；分区=factory 3MB + imgstore/imgframe/imguser/imgava（OTA 资源）+ cardid + audio；启动堆 ~188KB（无 PSRAM，与调研一致）
+- **原厂 8MB 全量备份（刷任何东西前已完成）**：`tools/firmware-backup/folotoy-ai-passport-factory-8mb-20260923.bin`（esptool read_flash 43.5s）；救砖恢复=`esptool write_flash 0x0 <备份>`
+- 新工具：`tools/serial-log.ps1`（串口日志+VID/PID 抓取，`-PortName COM8 -Seconds 10`）；esptool v5.4.0 已装（pip）
+- 下一步（P4 定位，按 09-21 验收清单）：①体验出厂固件（配网/三按键/手机 NFC 读 NTAG213）②试刷小智系 C3 板定义验证麦/扬声器/按键（C3 弱核，OPUS 推流吃紧→本地录音+离线补传 REC-08）③确认 NFC 芯片（门禁 ALL-301 预演）④量整机尺寸入外壳参考库
 
 ### 评估结论备查（不采购）
 

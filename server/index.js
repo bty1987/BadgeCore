@@ -350,12 +350,17 @@ async function handleApi(req, res, url) {
     }
 
     // 设备台账（04 册设备管理域）：会话自动注册/上线 + 操作日志
+    let boundOwner = '';  // 设备绑定传导：台账里绑了谁，沟通记录就归谁（receiver 未指定时）
     if (b.device) {
       const key = redactText(String(b.device));
-      const dev = db.prepare('SELECT id FROM devices WHERE device_key=?').get(key);
-      if (dev) db.prepare('UPDATE devices SET status=?, last_seen_at=? WHERE id=?').run('online', now, dev.id);
-      else db.prepare('INSERT INTO devices(device_key, model, status, last_seen_at, created_at) VALUES(?,?,?,?,?)')
-        .run(key, String(b.device_model || ''), 'online', now, now);
+      const dev = db.prepare('SELECT id, owner FROM devices WHERE device_key=?').get(key);
+      if (dev) {
+        boundOwner = String(dev.owner || '');
+        db.prepare('UPDATE devices SET status=?, last_seen_at=? WHERE id=?').run('online', now, dev.id);
+      } else {
+        db.prepare('INSERT INTO devices(device_key, model, status, last_seen_at, created_at) VALUES(?,?,?,?,?)')
+          .run(key, String(b.device_model || ''), 'online', now, now);
+      }
     }
 
     const info = db.prepare('INSERT INTO communications(created_at, duration_s, audio_path, transcript, status, owner, topic, customer_id, plan_id, meta) VALUES(?,?,?,?,?,?,?,?,?,?)')
@@ -365,7 +370,7 @@ async function handleApi(req, res, url) {
         String(b.audio_path || ''),
         transcript,
         transcript ? 'transcribed' : 'recorded',
-        String(b.owner || ''),
+        String(b.owner || boundOwner || ''),
         String(b.topic || ''),
         customerId,
         b.plan_id ? Number(b.plan_id) : null,
@@ -389,6 +394,30 @@ async function handleApi(req, res, url) {
       catch (e) { return sendJson(res, 200, { id, analyzed: false, error: e.message }); }
     }
     return sendJson(res, 200, { id });
+  }
+
+  // 设备心跳（receiver 转发设备 OTA 检查附带的状态；令牌鉴权）：注册/上线设备台账，
+  // 刷新版本/电量/IP/最后在线。5 分钟一次，设备台账页据此判断存活与续航。
+  if (pathname === '/api/device-heartbeat' && method === 'POST') {
+    const expect = getSetting(db, 'ingest_token');
+    if (!expect || req.headers['x-ingest-token'] !== expect) throw new HttpError(401, '入库令牌无效');
+    const b = await readBody(req);
+    const now = new Date().toISOString();
+    const key = redactText(String(b.device || ''));
+    if (!key) throw new HttpError(400, 'device 为空');
+    const model = redactText(String(b.model || ''));
+    const fw = redactText(String(b.version || ''));
+    const battery = redactText(String(b.battery || ''));
+    const dev = db.prepare('SELECT id, fw_version FROM devices WHERE device_key=?').get(key);
+    if (dev) {
+      db.prepare('UPDATE devices SET status=?, last_seen_at=?, fw_version=?, battery=?, model=? WHERE id=?')
+        .run('online', now, fw || dev.fw_version, battery, model || dev.model, dev.id);
+    } else {
+      db.prepare('INSERT INTO devices(device_key, model, fw_version, battery, status, last_seen_at, created_at) VALUES(?,?,?,?,?,?,?)')
+        .run(key, model, fw, battery, 'online', now, now);
+    }
+    audit(db, 'device', 'heartbeat', key, `v${fw || '?'} 电量${battery || '?'} ip=${redactText(String(b.ip || ''))}`);
+    return sendJson(res, 200, { ok: true });
   }
 
   // receiver 回填说话人分离转写（lfasr 完成后），并按配置重跑分析（令牌鉴权）

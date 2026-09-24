@@ -32,29 +32,126 @@ const ALERT_WORDS = (process.env.XF_ALERT_KEYWORDS || '').split(',').map(s => s.
 
 const stats = { sessions: 0, totalFrames: 0, totalBytes: 0, activeWs: 0 };
 
+// 工牌身份显示（BadgeCore 定制，需配套固件含 identity 解析；改内容免重刷固件）
+// 优先级：badge-identity.json（照 badge-identity.example.json 填）> 环境变量 BADGE_IDENTITY(JSON)
+// 文件变化实时广播给在线设备（type:"identity" WS 消息）；离线设备靠 5 分钟空闲 OTA 重检或下次连接拿到
+function loadBadgeIdentity() {
+  try {
+    const p = path.join(__dirname, 'badge-identity.json');
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (e) {
+    console.warn('[OTA] badge-identity.json 读取失败:', e.message);
+  }
+  if (process.env.BADGE_IDENTITY) {
+    try { return JSON.parse(process.env.BADGE_IDENTITY); } catch {}
+  }
+  return null;
+}
+let BADGE_IDENTITY = loadBadgeIdentity();
+
+// 广播身份给所有在线设备（hello 后也推一次）
+function broadcastIdentity() {
+  if (!BADGE_IDENTITY) return;
+  const msg = JSON.stringify({ type: 'identity', ...BADGE_IDENTITY });
+  let n = 0;
+  for (const ws of wss.clients) {
+    if (ws.readyState === ws.OPEN) { ws.send(msg); n++; }
+  }
+  if (n) console.log(`[OTA] 身份已推送 ${n} 台在线设备: ${JSON.stringify(BADGE_IDENTITY).slice(0, 80)}`);
+}
+
+// ---------- 固件自分发（OTA）：hardware/receiver/firmware/ 下放 xiaozhi-<版本>.bin ----------
+const FIRMWARE_DIR = path.join(__dirname, 'firmware');
+fs.mkdirSync(FIRMWARE_DIR, { recursive: true });
+function latestFirmware() {
+  try {
+    const bins = fs.readdirSync(FIRMWARE_DIR).filter(f => f.endsWith('.bin')).map(f => {
+      const m = f.match(/(\d+\.\d+\.\d+)/);
+      return m ? { file: f, version: m[1], parts: m[1].split('.').map(Number) } : null;
+    }).filter(Boolean);
+    if (!bins.length) return null;
+    bins.sort((a, b) => a.parts[0] - b.parts[0] || a.parts[1] - b.parts[1] || a.parts[2] - b.parts[2]);
+    return bins[bins.length - 1];
+  } catch { return null; }
+}
+
 // ---------- HTTP：OTA 接口 ----------
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === '/xiaozhi/ota/' || url.pathname === '/xiaozhi/ota') {
     const host = req.headers.host || '';
     const wsHost = host.includes(':') ? host.split(':')[0] : host; // 设备与电脑同局域网，用同一 IP
+    const fw = latestFirmware();
     const body = {
       websocket: {
         url: `ws://${wsHost}:${PORT}/xiaozhi/v1/`,
         token: 'badgecore-dev',
         version: 2,
       },
-      firmware: { version: '2.4.2', url: '' },
+      // 有固件包则下发（设备自行比版本决定是否升级，空闲时 5 分钟一检）
+      firmware: fw ? { version: fw.version, url: `http://${wsHost}:${PORT}/firmware/${encodeURIComponent(fw.file)}` }
+                   : { version: '2.4.2', url: '' },
       server_time: { timestamp: Date.now(), timezone_offset: 480 },
     };
-    console.log(`[OTA] ${new Date().toLocaleTimeString()} Device-Id=${req.headers['device-id'] || '?'} Client-Id=${req.headers['client-id'] || '?'} → 下发 ws://${wsHost}:${PORT}`);
+    if (BADGE_IDENTITY) {
+      body.identity = BADGE_IDENTITY; // 设备空闲时屏幕显示此身份内容
+    }
+    console.log(`[OTA] ${new Date().toLocaleTimeString()} Device-Id=${req.headers['device-id'] || '?'} Client-Id=${req.headers['client-id'] || '?'} UA=${req.headers['user-agent'] || '?'} → 下发 ws://${wsHost}:${PORT}${fw ? ` 固件${fw.version}` : ''}`);
+    // 设备心跳：OTA 检查即心跳（版本在 UA，电量/运行时长在自定义头），转发到后台设备台账
+    if (process.env.BADGE_SERVER && process.env.BADGE_TOKEN && req.headers['device-id']) {
+      const ua = req.headers['user-agent'] || '';
+      const vm = ua.match(/(\d+\.\d+\.\d+)/);
+      const payload = JSON.stringify({
+        device: `xiaozhi-passport:${req.headers['device-id'] || 'unknown'}`,
+        model: 'ai-passport',
+        version: vm ? vm[1] : '',
+        battery: req.headers['x-battery'] ? `${req.headers['x-battery']}%${req.headers['x-charging'] === '1' ? ' 充电中' : ''}` : '',
+        ip: req.socket.remoteAddress || '',
+        uptime_s: Number(req.headers['x-uptime'] || 0),
+        heap_free: Number(req.headers['x-heap-free'] || 0),
+      });
+      try {
+        const hb = http.request(process.env.BADGE_SERVER + '/api/device-heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': process.env.BADGE_TOKEN, 'Content-Length': Buffer.byteLength(payload) },
+        });
+        hb.on('error', () => {});
+        hb.end(payload);
+      } catch { /* 心跳失败不影响 OTA 响应 */ }
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
+    return;
+  }
+  if (url.pathname.startsWith('/firmware/')) {
+    const name = path.basename(decodeURIComponent(url.pathname.slice('/firmware/'.length)));
+    const file = path.join(FIRMWARE_DIR, name);
+    if (!name.endsWith('.bin') || !fs.existsSync(file)) { res.writeHead(404); res.end('not found'); return; }
+    const stat = fs.statSync(file);
+    console.log(`[OTA] 固件下载开始: ${name} (${(stat.size / 1024).toFixed(0)}KB)`);
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': stat.size });
+    const stream = fs.createReadStream(file);
+    stream.pipe(res);
+    res.on('close', () => {
+      const sent = stream.bytesRead;
+      console.log(`[OTA] 固件下载${sent >= stat.size ? '完成' : '中断'}: ${name} 已传 ${(sent / 1024).toFixed(0)}KB / ${(stat.size / 1024).toFixed(0)}KB`);
+    });
     return;
   }
   res.writeHead(404);
   res.end('not found');
 });
+
+// badge-identity.json 变化 → 重载并实时推送给在线设备
+// （watch 目录而非文件：编辑器"临时文件+改名"保存不会跟丢）
+try {
+  fs.watch(__dirname, (event, filename) => {
+    if (filename === 'badge-identity.json') {
+      BADGE_IDENTITY = loadBadgeIdentity();
+      broadcastIdentity();
+    }
+  });
+} catch (e) { /* 目录不可 watch 时忽略 */ }
 
 // ---------- WebSocket：音频流接收 ----------
 const wss = new WebSocketServer({ server, path: '/xiaozhi/v1/' });
@@ -62,6 +159,7 @@ const wss = new WebSocketServer({ server, path: '/xiaozhi/v1/' });
 wss.on('connection', (ws, req) => {
   stats.activeWs++;
   stats.sessions++;
+  const deviceId = req.headers['device-id'] || ''; // 真实设备标识（心跳/入库共用同一 key 格式）
   const sessionId = crypto.randomUUID().slice(0, 8);
   const filePath = path.join(SESSIONS_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}-${sessionId}.ogg`);
   let protocolVersion = 2;
@@ -90,6 +188,9 @@ wss.on('connection', (ws, req) => {
           audio_params: { sample_rate: 16000, frame_duration: 60 },
         }));
         console.log(`[WS ] 已回 server hello，等待音频帧… (会话 ${sessionId})`);
+        if (BADGE_IDENTITY) {
+          ws.send(JSON.stringify({ type: 'identity', ...BADGE_IDENTITY })); // 连接即同步最新身份
+        }
       } else {
         console.log(`[WS ] 文本消息: ${data.toString().slice(0, 120)}`);
       }
@@ -174,7 +275,8 @@ wss.on('connection', (ws, req) => {
         duration_s: frameCount * frameMs / 1000,
         audio_path: path.resolve(oggPath),
         transcript,
-        device: 'xiaozhi-1.75c',
+        device: deviceId ? `xiaozhi-passport:${deviceId}` : '',
+        device_model: 'ai-passport',
         owner: '',
         topic: '',
       }),
