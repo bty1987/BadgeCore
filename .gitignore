@@ -47,3 +47,5 @@ hardware/tools/*.exe
 hardware/tools/log/
 hardware/tools/project/
 hardware/tools/resource/
+hardware/tools/_temp/
+hardware/tools/config/
