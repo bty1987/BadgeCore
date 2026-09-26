@@ -112,6 +112,13 @@
     <div class="muted">receiver 启动时设置环境变量即可自动入库：</div>
     <pre style="background:#f8f9fb;border-radius:6px;padding:12px;margin-top:8px;font-size:12px" id="recv-cmd"></pre>
     <div class="muted" style="margin-top:8px">入库令牌：<code id="ingest-token"></code>（仅管理员可见）</div>
+    <div class="muted" style="margin-top:8px">累积收口（09 册 INT-02）：receiver 以 <code>SESSION_MODE=continuous</code> 启动时，会议等长场景的 VAD 会话聚合为工作缓冲，到每日定时或手动收口才入库。</div>
+    <div style="display:flex;gap:8px;align-items:end;margin-top:8px">
+      <div style="flex:1"><label>接收端地址（收口代理用）</label><input id="recv-url" placeholder="http://<本机IP>:8100"></div>
+      <button onclick="saveRecv()">保存地址</button>
+      <button class="primary" onclick="closeSessions()">立即收口</button>
+    </div>
+    <div class="muted" id="recv-close-result" style="margin-top:6px"></div>
   </div>
 
   <div class="card" id="card-users">
@@ -141,6 +148,22 @@ async function api(url, opts) {
   return res;
 }
 
+async function saveRecv() {
+  const res = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receiver: { base_url: $('recv-url').value.trim() } }) });
+  $('recv-close-result').textContent = res.ok ? '接收端地址已保存。' : '保存失败。';
+}
+async function closeSessions() {
+  if (!$('recv-url').value.trim()) { $('recv-close-result').textContent = '请先填写并保存接收端地址。'; return; }
+  $('recv-close-result').textContent = '收口中…';
+  try {
+    const res = await api('/api/session/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    $('recv-close-result').textContent = `收口完成：入库 ${res.closed} 个缓冲（接收端现存 ${res.buffers} 个，模式 ${res.mode}）。`;
+  } catch (e) {
+    $('recv-close-result').textContent = '收口失败：' + (e.message || '接收端不可达');
+  }
+}
+
 async function init() {
   document.getElementById('top').innerHTML = adminTopbar('admin');
   document.getElementById('side').innerHTML = adminSidebar('global');
@@ -162,8 +185,10 @@ async function init() {
       `# receiver 自动入库（BADGE_SERVER 指向本后台）\n` +
       `set BADGE_SERVER=http://<本机IP>:8200\n` +
       `set BADGE_TOKEN=${s.ingest_token}\n` +
+      `set SESSION_MODE=continuous   （可选，会议/前台等长场景聚合收口；默认 explicit）\n` +
       `node receiver.js`;
   } else { $('card-recv').style.display = 'none'; }
+  if (s.receiver?.base_url) $('recv-url').value = s.receiver.base_url;
   if (s.globals) {
     $('g-view-scope').value = s.globals.view_scope;
     $('g-delete-role').value = s.globals.delete_min_role;

@@ -24,6 +24,11 @@
           <option value="recorded">已录制</option><option value="transcribed">已转写</option>
           <option value="analyzing">分析中</option><option value="analyzed">已分析</option>
         </select>
+        <select id="scene" onchange="load()">
+          <option value="">场景：全部</option>
+          <option value="sales">销售沟通</option><option value="meeting">会议</option>
+          <option value="training">培训/讲座</option><option value="talk">管理谈话</option>
+        </select>
         <button class="btn" onclick="load()">查询</button>
         <span class="spacer" style="flex:1"></span><span id="count" style="color:var(--text-3);font-size:13px"></span>
       </div>
@@ -32,12 +37,14 @@
     <input type="file" id="file" accept=".mp3,.wav,.m4a,.aac,.mp4,.ogg" style="display:none">`;
 
   const ST = { recorded: ['已录制', 'off'], transcribed: ['已转写', 'info'], analyzing: ['分析中', 'warn'], analyzed: ['已分析', 'on'] };
+  const SCENE = { sales: ['销售', 'info'], meeting: ['会议', 'on'], training: ['培训', 'warn'], talk: ['谈话', 'danger'] };
   window.load = async function () {
-    const q = document.getElementById('q').value, st = document.getElementById('status').value;
-    const rows = await api(`/api/communications?q=${encodeURIComponent(q)}${st ? '&status=' + st : ''}`);
+    const q = document.getElementById('q').value, st = document.getElementById('status').value, sc = document.getElementById('scene').value;
+    const rows = await api(`/api/communications?q=${encodeURIComponent(q)}${st ? '&status=' + st : ''}${sc ? '&scene=' + sc : ''}`);
     document.getElementById('count').textContent = `共 ${rows.length} 条`;
     renderTable(document.getElementById('tbl'), [
       { key: 'topic', title: '主题', render: r => `<a href="/communication.html?id=${r.id}">${esc(r.topic || '沟通 #' + r.id)}</a>` },
+      { key: 'scene', title: '场景', w: '70px', render: r => { const s = SCENE[r.scene] || ['销售', 'info']; return `<span class="tag ${s[1]}">${s[0]}</span>`; } },
       { key: 'owner', title: '销售', w: '90px', render: r => esc(r.owner || '-') },
       { key: 'duration_s', title: '时长', w: '80px', render: r => r.duration_s ? Math.floor(r.duration_s / 60) + '′' + (r.duration_s % 60) + '″' : '-' },
       { key: 'status', title: '处理状态', w: '90px', render: r => { const s = ST[r.status] || [r.status, 'off']; return `<span class="tag ${s[1]}">${s[0]}</span>`; } },

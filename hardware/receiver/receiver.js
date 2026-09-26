@@ -24,8 +24,104 @@ const PORT = 8100; // 8000 被本机 aTrust VPN 组件占用，避开
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
+// ---------- 会话模式（docs/会话模式设计，09 册 INT-02）----------
+// explicit（默认）: 一次 VAD 会话=一条沟通记录（销售场景，行为与 v0.3 完全一致）
+// continuous      : VAD 会话文本/音频帧追加「工作会话缓冲」，按 每日定时 + 手动 收口聚合入库（会议/前台等长场景）
+const SESSION_MODE = process.env.SESSION_MODE === 'continuous' ? 'continuous' : 'explicit';
+const GAP_CLOSE_MINUTES = Number(process.env.GAP_CLOSE_MINUTES || 10);       // 软分段：静音超此时长在缓冲内插分段标记
+const DAILY_CLOSE_TIME = String(process.env.DAILY_CLOSE_TIME || '18:00');    // 每日自动收口时刻（HH:MM）
+const SPOOL_FILE = path.join(SESSIONS_DIR, 'work-buffer-spool.json');         // 缓冲落盘（重启恢复文本；音频帧不落盘，重启后收口无音频仅文本）
+
 // 讯飞听写凭据（缺省则仅录制不转写；配置方法见 asr.config.example.json）
 const XF_CONFIG = loadXfConfig(true);
+
+// 工作会话缓冲（continuous 模式，按设备聚合）
+const workBuffers = new Map(); // deviceKey → { device, texts:[], frames:[], frameMs, startedAt, lastActivityAt, segCount, frameCount }
+function getBuffer(deviceKey) {
+  if (!workBuffers.has(deviceKey)) {
+    workBuffers.set(deviceKey, { device: deviceKey, texts: [], frames: [], frameMs: 60, startedAt: null, lastActivityAt: null, segCount: 0, frameCount: 0 });
+  }
+  return workBuffers.get(deviceKey);
+}
+function saveSpool() {
+  try {
+    const data = [...workBuffers.values()].filter(b => b.texts.length).map(b => ({
+      device: b.device, texts: b.texts, startedAt: b.startedAt, lastActivityAt: b.lastActivityAt, segCount: b.segCount,
+    }));
+    if (data.length) fs.writeFileSync(SPOOL_FILE, JSON.stringify(data));
+    else if (fs.existsSync(SPOOL_FILE)) fs.unlinkSync(SPOOL_FILE);
+  } catch (e) { console.warn('[BUF] 缓冲落盘失败:', e.message); }
+}
+function loadSpool() {
+  try {
+    if (!fs.existsSync(SPOOL_FILE)) return;
+    for (const d of JSON.parse(fs.readFileSync(SPOOL_FILE, 'utf8'))) {
+      const b = getBuffer(d.device);
+      Object.assign(b, d); // 音频帧不恢复：重启后收口仅聚合文本（防丢优先）
+      console.log(`[BUF] 恢复工作缓冲 ${d.device}（${d.texts.length} 段文本，音频帧需重录）`);
+    }
+  } catch (e) { console.warn('[BUF] 缓冲恢复失败:', e.message); }
+}
+loadSpool();
+
+/** 收口一个设备缓冲：拼接文本 + 合并 Ogg → 一次入库（09 册 INT-02/K6） */
+function closeBuffer(deviceKey, reason) {
+  const b = workBuffers.get(deviceKey);
+  if (!b || (!b.texts.length && !b.frameCount)) { workBuffers.delete(deviceKey); return null; }
+  const text = b.texts.join('\n');
+  let audioPath = '';
+  if (b.frameCount > 0) {
+    // 合并音频：把缓冲内所有 OPUS 帧按序封装为一个 Ogg（buildOggOpus 本就按帧序编 granule，天然支持拼接）
+    const merged = path.join(SESSIONS_DIR, `workbuf-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID().slice(0, 6)}.ogg`);
+    fs.writeFileSync(merged, buildOggOpus(b.frames, b.frameMs));
+    audioPath = merged;
+  }
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const startT = b.startedAt ? `${pad(new Date(b.startedAt).getHours())}:${pad(new Date(b.startedAt).getMinutes())}` : '--:--';
+  const topic = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} 聚合记录（${startT}-${pad(d.getHours())}:${pad(d.getMinutes())}，${b.segCount} 段，${reason}收口）`;
+  const payload = JSON.stringify({
+    created_at: new Date().toISOString(),
+    duration_s: b.frameCount * b.frameMs / 1000,
+    audio_path: audioPath,
+    transcript: text,
+    device: b.device,
+    device_model: 'ai-passport',
+    owner: '',
+    topic,
+  });
+  const base = process.env.BADGE_SERVER;
+  if (base) {
+    fetch(base.replace(/\/$/, '') + '/api/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': process.env.BADGE_TOKEN || '' },
+      body: payload,
+      signal: AbortSignal.timeout(8000),
+    }).then(r => r.json()).then(res => {
+      if (res.id) {
+        console.log(`[BUF] ${deviceKey} ${reason}收口入库 comm#${res.id}${res.analyzed ? '（已分析）' : ''}（${b.segCount} 段 → 1 条聚合记录）`);
+        if (audioPath && XF_CONFIG && process.env.BADGE_LFASR !== 'off') runSpeakerDiarization(res.id, audioPath);
+      } else console.log(`[BUF] 收口入库被拒: ${res.error || JSON.stringify(res)}`);
+    }).catch(e => console.log(`[BUF] 收口入库失败: ${e.message}`));
+  } else {
+    console.log(`[BUF] ${deviceKey} ${reason}收口（未配 BADGE_SERVER，仅落盘 ${audioPath || '无音频'}）`);
+  }
+  workBuffers.delete(deviceKey);
+  saveSpool();
+  return { segCount: b.segCount, textLen: text.length, audioPath };
+}
+
+// 每日定时收口（continuous）：到 DAILY_CLOSE_TIME 且当日未收口
+let lastDailyClose = new Date().toISOString().slice(0, 10);
+setInterval(() => {
+  if (SESSION_MODE !== 'continuous' || !workBuffers.size) return;
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const [h, m] = DAILY_CLOSE_TIME.split(':').map(Number);
+  if (today === lastDailyClose || (now.getHours() * 60 + now.getMinutes()) < h * 60 + m) return;
+  lastDailyClose = today;
+  for (const key of [...workBuffers.keys()]) closeBuffer(key, '定时');
+}, 60_000).unref();
 
 // 实时辅助关键词（AI-09 一期规则层）：环境变量 XF_ALERT_KEYWORDS，逗号分隔，与后台竞品库/风险规则保持一致
 const ALERT_WORDS = (process.env.XF_ALERT_KEYWORDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -138,6 +234,22 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  // 手动收口（09 册 INT-02：continuous 模式下立即聚合缓冲入库；后台「会话收口」按钮经 /api/session/close 代理到这里）
+  if (url.pathname === '/session/close' && (req.method === 'POST' || req.method === 'GET')) {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      let device = '';
+      try { device = JSON.parse(body || '{}').device || ''; } catch { /* 忽略 body */ }
+      const keys = device ? [...workBuffers.keys()].filter(k => k === device || k.includes(device)) : [...workBuffers.keys()];
+      const closed = keys.map(k => closeBuffer(k, '手动')).filter(Boolean).length;
+      const r = { ok: true, mode: SESSION_MODE, closed, buffers: workBuffers.size };
+      console.log(`[BUF] 手动收口: ${r.closed} 个缓冲入库（现存 ${r.buffers} 个）`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(r));
+    });
+    return;
+  }
   res.writeHead(404);
   res.end('not found');
 });
@@ -238,29 +350,55 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     stats.activeWs--;
+    const continuous = SESSION_MODE === 'continuous';
     let saved = '(无音频)';
-    if (frameCount > 0) {
+    if (frameCount > 0 && !continuous) {
       oggPath = filePath;
       fs.writeFileSync(oggPath, buildOggOpus(frameList, frameMs));
       saved = `${path.basename(oggPath)} (${(fs.statSync(oggPath).size / 1024).toFixed(1)}KB)`;
+    } else if (frameCount > 0 && continuous) {
+      saved = `${frameCount} 帧入工作缓冲（收口时合并封装）`;
     }
     console.log(`\n[WS ] 会话${sessionId} 结束：共 ${frameCount} 帧，${(byteCount / 1024).toFixed(1)}KB OPUS → ${saved}`);
     if (transcriber) {
       transcriber.end(text => {
         if (text) {
-          const txtPath = filePath.replace(/\.ogg$/, '.xf.txt');
-          fs.writeFileSync(txtPath, text, 'utf8');
-          console.log(`[ASR] 会话${sessionId} 转写完成（${text.length} 字）→ ${path.basename(txtPath)}`);
+          console.log(`[ASR] 会话${sessionId} 转写完成（${text.length} 字）`);
           console.log(`[ASR] ${text}`);
         } else {
           console.log(`[ASR] 会话${sessionId} 无转写内容`);
         }
-        ingestToServer(text || '');
+        if (continuous) appendToBuffer(text || '');
+        else ingestToServer(text || '');
       });
+    } else if (continuous) {
+      appendToBuffer('');
     } else {
       ingestToServer('');
     }
   });
+
+  // continuous 模式：本 VAD 会话追加到设备工作会话缓冲（文本带时间前缀、音频帧入合并队列，不立即入库）
+  function appendToBuffer(transcript) {
+    const key = deviceId ? `xiaozhi-passport:${deviceId}` : 'unknown-device';
+    const b = getBuffer(key);
+    const now = Date.now();
+    if (b.texts.length && b.lastActivityAt && now - b.lastActivityAt > GAP_CLOSE_MINUTES * 60000) {
+      b.texts.push(`── 软分段（静音超 ${GAP_CLOSE_MINUTES} 分钟）──`); // 软分段标记：不终结当日缓冲
+    }
+    if (transcript) {
+      const t = new Date();
+      b.texts.push(`[${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}] ${transcript}`);
+      b.segCount++;
+    }
+    b.frames = b.frames.concat(frameList);
+    b.frameCount += frameCount;
+    if (frameCount > 0) b.frameMs = frameMs;
+    if (!b.startedAt) b.startedAt = now;
+    b.lastActivityAt = now;
+    saveSpool();
+    console.log(`[BUF] 会话${sessionId} 追加至工作缓冲（累计 ${b.segCount} 段文本 / ${b.frameCount} 帧，等待 定时/手动 收口）`);
+  }
 
   // 自动入库到管理后台（D13）：环境变量 BADGE_SERVER + BADGE_TOKEN（见后台「设置」页）
   function ingestToServer(transcript) {
@@ -291,36 +429,39 @@ wss.on('connection', (ws, req) => {
     }).catch(e => console.log(`[API] 入库失败: ${e.message}`));
   }
 
-  // 入库后异步跑说话人分离（讯飞语音转写 lfasr，可能需数分钟）；成功回填后台并自动重出报告。
-  // 服务未开通/排队超时则静默失败，保留听写单人流文本（BADGE_LFASR=off 可关闭）。
-  function runSpeakerDiarization(commId, oggFile) {
-    console.log(`[SPK] comm#${commId} 提交说话人分离（异步）…`);
-    const child = spawn(process.execPath, [path.join(__dirname, 'asr-xf-transcribe.js'), oggFile], { stdio: 'ignore' });
-    child.on('exit', code => {
-      const spkFile = oggFile + '.spk.txt';
-      if (code !== 0 || !fs.existsSync(spkFile)) {
-        return console.log(`[SPK] comm#${commId} 分离未完成（语音转写服务未开通或排队超时），保留听写文本`);
-      }
-      const spkText = fs.readFileSync(spkFile, 'utf8');
-      const base = process.env.BADGE_SERVER;
-      if (!base) return;
-      fetch(base.replace(/\/$/, '') + `/api/communications/${commId}/transcript`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': process.env.BADGE_TOKEN || '' },
-        body: JSON.stringify({ transcript: spkText }),
-        signal: AbortSignal.timeout(120_000),
-      }).then(r => r.json()).then(d => {
-        console.log(`[SPK] comm#${commId} ${d.ok ? `说话人转写已回填${d.analyzed ? '，报告已按角色重出' : ''}` : '回填失败: ' + (d.error || '?')}`);
-      }).catch(e => console.log(`[SPK] comm#${commId} 回填异常: ${e.message}`));
-    });
-  }
+  // 入库后异步跑说话人分离 → runSpeakerDiarization（已提升至模块级，收口聚合入库也复用）
   ws.on('error', (e) => console.log(`[WS ] 错误: ${e.message}`));
 });
 
+// 入库后异步跑说话人分离（讯飞语音转写 lfasr，可能需数分钟）；成功回填后台并自动重出报告。
+// 服务未开通/排队超时则静默失败，保留听写单人流文本（BADGE_LFASR=off 可关闭）。
+function runSpeakerDiarization(commId, oggFile) {
+  console.log(`[SPK] comm#${commId} 提交说话人分离（异步）…`);
+  const child = spawn(process.execPath, [path.join(__dirname, 'asr-xf-transcribe.js'), oggFile], { stdio: 'ignore' });
+  child.on('exit', code => {
+    const spkFile = oggFile + '.spk.txt';
+    if (code !== 0 || !fs.existsSync(spkFile)) {
+      return console.log(`[SPK] comm#${commId} 分离未完成（语音转写服务未开通或排队超时），保留听写文本`);
+    }
+    const spkText = fs.readFileSync(spkFile, 'utf8');
+    const base = process.env.BADGE_SERVER;
+    if (!base) return;
+    fetch(base.replace(/\/$/, '') + `/api/communications/${commId}/transcript`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': process.env.BADGE_TOKEN || '' },
+      body: JSON.stringify({ transcript: spkText }),
+      signal: AbortSignal.timeout(120_000),
+    }).then(r => r.json()).then(d => {
+      console.log(`[SPK] comm#${commId} ${d.ok ? `说话人转写已回填${d.analyzed ? '，报告已按角色重出' : ''}` : '回填失败: ' + (d.error || '?')}`);
+    }).catch(e => console.log(`[SPK] comm#${commId} 回填异常: ${e.message}`));
+  });
+}
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log('==============================================');
-  console.log('  BadgeCore 接收服务端 v0.3（录制 + 实时转写）');
+  console.log('  BadgeCore 接收服务端 v0.4（录制 + 实时转写 + 会话模式）');
   console.log(`  监听 0.0.0.0:${PORT}`);
+  console.log(`  会话模式:  ${SESSION_MODE}${SESSION_MODE === 'continuous' ? `（软分段 ${GAP_CLOSE_MINUTES}min / 每日 ${DAILY_CLOSE_TIME} / POST /session/close 手动收口）` : '（一次 VAD 会话=一条记录）'}`);
   console.log(`  OTA 接口:  http://<本机IP>:${PORT}/xiaozhi/ota/`);
   console.log(`  音频通道:  ws://<本机IP>:${PORT}/xiaozhi/v1/`);
   console.log(`  录制目录:  ${SESSIONS_DIR}`);

@@ -16,17 +16,23 @@ const id = new URLSearchParams(location.search).get('id');
   if (!id) { main.innerHTML = '<div class="card">缺少 id 参数</div>'; return; }
   const c = await api('/api/communications/' + id);
   let rp = c.report && typeof c.report === 'object' ? c.report : (typeof c.report === 'string' ? (() => { try { return JSON.parse(c.report); } catch { return null; } })() : null);
+  const curHistory = (c.meta && Array.isArray(c.meta.history)) ? c.meta.history : []; // 改标前的旧报告（INT-11）
   const stMap = { recorded: '已录制', transcribed: '已转写', analyzing: '分析中', analyzed: '已分析' };
+  const SCENE = { sales: ['销售沟通', 'info'], meeting: ['会议纪要', 'on'], training: ['培训·讲座', 'warn'], talk: ['管理谈话', 'danger'] };
+  const curScene = SCENE[c.scene] ? c.scene : 'sales';
   main.innerHTML = `
     <div class="page-head"><a href="/communications.html">‹ 返回沟通列表</a>
       <h1 style="font-size:16px">${esc(c.topic || '沟通 #' + c.id)}</h1>
+      <span class="tag ${SCENE[curScene][1]}">${SCENE[curScene][0]}</span>
       <span class="tag info">${stMap[c.status] || c.status || '-'}</span>
-      <span style="color:var(--text-3);font-size:13px">${fmtTime(c.created_at)} · ${c.duration_s ? Math.floor(c.duration_s / 60) + ' 分 ' + (c.duration_s % 60) + ' 秒' : '时长未知'} · 销售 ${esc(c.owner || '-')}${c.customer ? ' · 客户 ' + esc(c.customer.name) : ''}</span>
+      <span style="color:var(--text-3);font-size:13px">${fmtTime(c.created_at)} · ${c.duration_s ? Math.floor(c.duration_s / 60) + ' 分 ' + (c.duration_s % 60) + ' 秒' : '时长未知'} · ${curScene === 'sales' ? '销售' : '归属'} ${esc(c.owner || '-')}${c.customer ? ' · 客户 ' + esc(c.customer.name) : ''}${curScene === 'talk' && c.participants ? ' · 参与者 ' + esc(c.participants) : ''}</span>
       <span class="spacer"></span>
+      ${me.role !== 'sales' ? `<select id="scene-sel" style="height:30px">${Object.keys(SCENE).map(s => `<option value="${s}" ${s === curScene ? 'selected' : ''}>${SCENE[s][0]}</option>`).join('')}</select>
+      <button class="btn" onclick="changeScene()">改标重析</button>` : ''}
       <button class="btn" onclick="reanalyze()">重新分析</button></div>
     <div class="tabbar">
       <a class="active" onclick="show(0,this)">字幕全文</a><a onclick="show(1,this)">摘要</a>
-      <a onclick="show(2,this)">分析报告</a><a onclick="show(3,this)">待办</a>
+      <a onclick="show(2,this)">分析报告</a><a onclick="show(3,this)">${{ sales: '待办', meeting: '行动项', training: '考核题', talk: '双向承诺' }[curScene]}</a>
     </div>
     <div class="card" id="pane0">${c.transcript ? renderTranscript(c.transcript) : '<div class="empty"><div class="icon">🎙️</div>转写尚未完成</div>'}</div>
     <div id="pane1" style="display:none">
@@ -34,15 +40,24 @@ const id = new URLSearchParams(location.search).get('id');
         <div style="line-height:2;color:var(--text)">${rp?.summary ? esc(rp.summary) : '<div class="empty"><div class="icon">📝</div>暂无摘要，等待分析完成</div>'}</div></div>
       ${rp?.key_facts?.length ? '<div class="card"><div style="font-weight:600;margin-bottom:10px">关键信息抽取</div><table class="tbl"><tbody>' + rp.key_facts.map(kf => '<tr><td style="width:150px;color:var(--text-2)">' + esc(kf.k) + '</td><td>' + esc(kf.v) + '</td></tr>').join('') + '</tbody></table></div>' : ''}
     </div>
-    <div id="pane2" style="display:none">${renderReport(rp)}</div>
-    <div class="card" id="pane3" style="display:none">${renderTodos(rp)}</div>`;
+    <div id="pane2" style="display:none">${renderReport(rp, curScene)}</div>
+    <div class="card" id="pane3" style="display:none">${renderActionPane(rp, curScene)}</div>`;
+
+  window.changeScene = async function () {
+    const scene = document.getElementById('scene-sel').value;
+    if (scene === curScene) { toast('场景未变化'); return; }
+    if (scene === 'talk' && !confirm('切换为「管理谈话」后，该记录仅参与者与管理员可见（INT-40），确认？')) return;
+    toast('已改标，重新分析中…');
+    await api(`/api/communications/${id}/scene`, { method: 'POST', body: { scene } }).catch(() => {});
+    setTimeout(() => location.reload(), 2500);
+  };
 
   const ROLE_COLOR = { '销售': 'info', '设计师': 'info', '客户': 'success', '店长': 'warn' };
   function renderTranscript(text) {
-    const parts = text.split(/(?=(?:销售|客户|设计师|店长|经理)s*[：:])/).filter(Boolean);
+    const parts = text.split(/(?=(?:销售|客户|设计师|店长|经理|说话人\d+)\s*[：:])/).filter(Boolean);
     if (parts.length <= 1) return '<div style="white-space:pre-wrap;line-height:2">' + esc(text) + '</div>';
     return parts.map(seg => {
-      const m = seg.match(/^([^：:]{1,4})[：:]s*([sS]*)$/);
+      const m = seg.match(/^([^：:]{1,6})\s*[：:]([\s\S]*)$/);
       if (!m) return '<div style="padding:8px 0">' + esc(seg) + '</div>';
       const role = m[1], color = ROLE_COLOR[role] || 'info';
       return '<div style="display:flex;gap:10px;padding:7px 0"><span class="tag ' + color + '" style="flex:none;height:fit-content;margin-top:1px">' + esc(role) + '</span><div style="line-height:1.9">' + esc(m[2]) + '</div></div>';
@@ -58,13 +73,67 @@ const id = new URLSearchParams(location.search).get('id');
     await api(`/api/communications/${id}/analyze`, { method: 'POST' }).catch(() => {});
     setTimeout(() => location.reload(), 2000);
   };
-  function renderTodos(rp) {
+  function renderActionPane(rp, scene) {
+    if (scene === 'meeting') {
+      if (!rp?.action_items?.length) return '<div class="empty"><div class="icon">☑️</div>暂无行动项（会上承诺自动提取）</div>';
+      return rp.action_items.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6">☑️ ${esc(t.what)} ${t.owner ? `<span class="tag info">${esc(t.owner)}</span>` : ''} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
+    }
+    if (scene === 'training') {
+      if (!rp?.quiz?.length) return '<div class="empty"><div class="icon">📝</div>暂无考核题（培训效果检验）</div>';
+      return rp.quiz.map((q, i) => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6"><b>${i + 1}. ${esc(q.question)}</b><div style="color:var(--text-2);margin-top:4px">参考答案：${esc(q.answer || '')}</div></div>`).join('');
+    }
+    if (scene === 'talk') {
+      if (!rp?.commitments?.length) return '<div class="empty"><div class="icon">🤝</div>未提取到双向承诺（事实层记录，不做评价）</div>';
+      return rp.commitments.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6"><span class="tag ${t.by === '管理者' ? 'warn' : 'info'}">${esc(t.by || '?')}承诺</span> ${esc(t.what)} ${t.due ? `<span class="tag warn">时限 ${esc(t.due)}</span>` : ''}</div>`).join('');
+    }
     if (!rp?.todos?.length) return '<div class="empty"><div class="icon">☑️</div>暂无待办（从承诺事项自动提取）</div>';
     return rp.todos.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6">☑️ ${esc(t.what)} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
   }
-  function renderReport(rp) {
+  function renderReport(rp, scene) {
     if (!rp) return '<div class="empty"><div class="icon">🤖</div>暂无分析结果。点击右上角「重新分析」生成。</div>';
     const sec = (title, inner) => `<div class="card" style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:10px">${title}</div>${inner}</div>`;
+    const list = arr => '<ul style="margin:8px 0 0 18px;line-height:1.9">' + (arr || []).map(s => `<li>${esc(s)}</li>`).join('') + '<li style="list-style:none;color:var(--text-3)">' + ((arr || []).length ? '' : '无') + '</li></ul>';
+    // —— 会议纪要（09 册 §4.1）——
+    if (scene === 'meeting') {
+      let html = sec('分议题摘要', (rp.topics || []).map(t => `
+        <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><b>${esc(t.topic || '-')}</b>
+          <div style="margin-top:4px"><span class="tag on">结论</span> ${esc(t.conclusion || '')}</div>
+          <div style="color:var(--text-2);font-size:13px;margin-top:2px">讨论：${esc(t.discussion || '')}</div></div>`).join('') || '无');
+      html += sec('会议决议', (rp.decisions || []).length ? (rp.decisions || []).map(d => `
+        <div style="padding:8px 0;border-bottom:1px solid #f3f4f6">✅ ${esc(d.what)} ${d.owner ? `<span class="tag info">负责：${esc(d.owner)}</span>` : ''}
+          <div style="color:var(--text-3);font-size:12.5px;margin-top:3px">依据：${esc(d.evidence || '')}</div></div>`).join('') : '<span style="color:var(--text-3)">未检出明确决议（讨论未定项见下方未决事项）</span>');
+      html += sec('争议点', (rp.disputes || []).length ? (rp.disputes || []).map(d => `
+        <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><b>${esc(d.topic || '-')}</b>
+          <div style="font-size:13px;margin-top:4px">方A：${esc(d.side_a || '-')} ｜ 方B：${esc(d.side_b || '-')}</div>
+          <div style="color:var(--text-3);font-size:12.5px">状态：${esc(d.status || '')}</div></div>`).join('') : '<span class="tag on">未检出明显争议</span>');
+      html += sec('未决事项（下次会议回顾）', list(rp.open_issues));
+      html += sec('发言人数估计', `<span class="tag info">${rp.attendees_hint ?? '-'} 人</span>（参会人请人工确认）`);
+      return appendHistory(html, rp);
+    }
+    // —— 培训/讲座（09 册 §4.2）——
+    if (scene === 'training') {
+      let html = sec('知识点', (rp.knowledge_points || []).map(k => `
+        <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><b>${esc(k.point || '-')}</b>
+          <div style="color:var(--text-2);margin-top:3px">${esc(k.detail || '')}</div>
+          <div style="color:var(--text-3);font-size:12.5px;margin-top:3px">依据：${esc(k.evidence || '')}</div></div>`).join('') || '无');
+      if ((rp.qa || []).length) html += sec('现场答疑', rp.qa.map(x => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><span class="tag info">问</span> ${esc(x.q || '')}<div style="margin-top:3px"><span class="tag on">答</span> ${esc(x.a || '')}</div></div>`).join(''));
+      if ((rp.quotes || []).length) html += sec('金句 / 关键表述', list(rp.quotes));
+      if ((rp.chapters || []).length) html += sec('内容章节', rp.chapters.map(ch => `<div style="padding:6px 0;border-bottom:1px solid #f3f4f6">${ch.time_hint ? `<span class="tag off">${esc(ch.time_hint)}</span> ` : ''}<b>${esc(ch.title || '')}</b> <span style="color:var(--text-2);font-size:13px">${esc(ch.gist || '')}</span></div>`).join(''));
+      return appendHistory(html, rp);
+    }
+    // —— 管理谈话（09 册 §4.3；K5 红线：无评分类字段）——
+    if (scene === 'talk') {
+      let html = sec('双向承诺', (rp.commitments || []).length ? rp.commitments.map(cm => `
+        <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><span class="tag ${cm.by === '管理者' ? 'warn' : 'info'}">${esc(cm.by || '?')}</span> ${esc(cm.what)}
+          ${cm.due ? `<span class="tag warn">时限 ${esc(cm.due)}</span>` : ''}
+          <div style="color:var(--text-3);font-size:12.5px;margin-top:3px">依据：${esc(cm.evidence || '')}</div></div>`).join('') : '<span style="color:var(--text-3)">未检出明确承诺</span>');
+      html += sec('讨论过的问题', list(rp.issues_discussed));
+      html += sec('未达成一致', list(rp.unresolved));
+      if (rp.next_review) html += sec('建议回顾', esc(rp.next_review));
+      html += '<div class="card" style="background:var(--bg-2, #f9fafb)"><span style="color:var(--text-3);font-size:12.5px">本记录为事实层纪要，不含情绪/态度/绩效评分（09 册红线 K5）；可见范围=参与者与管理员（INT-40）。</span></div>';
+      return appendHistory(html, rp);
+    }
+    // —— 销售沟通（03 册 ANA，原渲染不变）——
     let html = '';
     html += sec('客户立场（ANA-03）', `
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
@@ -88,7 +157,14 @@ const id = new URLSearchParams(location.search).get('id');
       <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><span class="tag danger">${esc(v.severity || '中')}</span> <b>${esc(v.item)}</b>
       <div style="color:var(--text-2);font-size:13px;margin-top:4px">证据：${esc(v.evidence || '')}</div></div>`).join(''));
     else html += sec('违规检测（ANA-08）', '<span class="tag on">已完成全量违规项检测，未发现任何违规内容</span>');
-    return html;
+    return appendHistory(html, rp);
+  }
+  /** 改标历史（INT-11：旧报告版本化留存，可回看） */
+  function appendHistory(html, rp) {
+    const h = (rp && curHistory && curHistory.length) ? curHistory : [];
+    if (!h.length) return html;
+    return html + `<div class="card"><div style="font-weight:600;margin-bottom:10px">改标历史（${h.length} 份旧报告，INT-11）</div>` +
+      h.map(x => `<div style="padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:13px"><span class="tag off">${SCENE[x.scene] ? SCENE[x.scene][0] : x.scene}</span> ${fmtTime(x.at)} · 摘要：${esc((x.report?.summary || '').slice(0, 60))}…</div>`).join('') + '</div>';
   }
 })();
 </script>

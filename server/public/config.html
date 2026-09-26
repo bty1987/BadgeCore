@@ -169,6 +169,18 @@ const FIELDS = {
       { key: 'name', label: '分类名称', type: 'text', required: true, ph: '如：品牌信任 / 商务报价 / 产品价值' },
       { key: 'desc', label: '分类说明', type: 'textarea', ph: '该洞察维度关注的沟通内容' },
     ] },
+  scene_profiles: { label: '场景模板（09 册 INT-13）',
+    columns: [
+      { key: 'name', title: '模板名称', w: '160px' },
+      { key: 'scene', title: '适用场景', render: r => `<span class="tag ${r.data.scene === 'talk' ? 'danger' : r.data.scene === 'meeting' ? 'on' : r.data.scene === 'training' ? 'warn' : 'info'}">${({ sales: '销售沟通', meeting: '会议', training: '培训/讲座', talk: '管理谈话' }[r.data.scene]) || '销售沟通'}</span>`, w: '100px' },
+      { key: 'guide', title: '注入分析引擎的指引', render: r => `<span style="color:var(--text-2);font-size:12.5px">${esc((r.data.guide || '').slice(0, 60))}</span>` },
+      { key: 'enabled', title: '状态', render: r => `<span class="tag ${r.enabled ? 'on' : 'off'}">${r.enabled ? '启用' : '停用'}</span>`, w: '70px' },
+    ],
+    form: [
+      { key: 'name', label: '模板名称', type: 'text', required: true, ph: '如：周会纪要口径' },
+      { key: 'scene', label: '适用场景', type: 'select', options: ['sales', 'meeting', 'training', 'talk'], optionLabels: ['销售沟通', '会议', '培训/讲座', '管理谈话'] },
+      { key: 'guide', label: '分析指引（注入该场景的分析引擎）', type: 'textarea', required: true, ph: '如会议：决议须注明负责人与截止时间；如谈话：只记录事实层承诺，不评价表达方式' },
+    ] },
   scheduled_reports: { label: '定时报告',
     columns: [
       { key: 'name', title: '任务名称', w: '200px' },

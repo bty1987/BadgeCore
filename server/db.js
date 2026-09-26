@@ -134,6 +134,10 @@ function openDb(dbFile) {
     ['communications', 'customer_id', 'INTEGER'],
     ['communications', 'plan_id', 'INTEGER'],
     ['customers', 'silence_notified_at', 'TEXT'],
+    // 09 册内部组织场景（INT-10/40/12）：场景标签 + 谈话参与者（逗分隔）+ 设备默认场景
+    ['communications', 'scene', "TEXT DEFAULT 'sales'"],
+    ['communications', 'participants', 'TEXT DEFAULT \'\''],
+    ['devices', 'default_scene', "TEXT DEFAULT 'sales'"],
   ]) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch { /* 列已存在 */ }
   }

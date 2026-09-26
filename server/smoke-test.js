@@ -308,6 +308,78 @@ async function waitReady(child) {
     });
     check('回填端点令牌鉴权', badFill.status === 401);
 
+    // 10.9 09 册内部组织场景（D22）：设备默认场景 / 场景模板 / 改标重析 / talk 权限收紧
+    const dev1 = (await api('GET', '/api/devices')).data.find(d => d.device_key.includes('TEST01'));
+    r = await api('POST', `/api/devices/${dev1.id}/bind`, { owner: '张三', default_scene: 'meeting' });
+    check('设备默认场景绑定（INT-12）', r.status === 200);
+    const mtgIngest = await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({
+        created_at: new Date().toISOString(), duration_s: 1800, device: 'xiaozhi-1.75c:TEST01',
+        topic: '09册周会冒烟', transcript: '说话人1: 周会开始，版本发布定在下周三。说话人2: 测试资源不足，希望协调。说话人1: 下周一调两人，预算的事下次再议。',
+      }),
+    });
+    const mtg = await mtgIngest.json();
+    check('设备默认场景传导：入库自动 scene=meeting', mtgIngest.status === 200 && mtg.id > 0);
+    r = await api('GET', `/api/communications/${mtg.id}`);
+    check('会议纪要骨架（decisions/action_items/topics，INT-20）', ['decisions', 'action_items', 'topics'].every(k => (r.data?.report || {})[k] !== undefined));
+    check('会议纪要产出行动项', (r.data?.report?.action_items || []).length >= 1);
+    check('报告 meta.scene=meeting', r.data?.report?.meta?.scene === 'meeting');
+
+    r = await api('POST', `/api/communications/${mtg.id}/scene`, { scene: 'sales' });
+    check('改标重析（INT-11）+ 旧报告版本化', r.status === 200 && r.data?.history_count >= 1 && 'stance' in (r.data?.report || {}));
+    r = await api('GET', `/api/communications/${mtg.id}`);
+    check('改标后骨架切换且无旧场景字段', 'stance' in r.data.report && !('decisions' in r.data.report));
+    check('详情含改标历史（meta.history）', (r.data?.meta?.history || []).length >= 1 && r.data.meta.history[0].scene === 'meeting');
+    r = await api('POST', `/api/communications/${mtg.id}/scene`, { scene: 'bogus' });
+    check('改标非法场景 400', r.status === 400);
+
+    // 场景筛选
+    r = await api('GET', '/api/communications?scene=sales');
+    check('场景筛选 sales 只出 sales', (r.data || []).length >= 1 && (r.data || []).every(x => x.scene === 'sales'));
+
+    // talk 权限（INT-40/K4：对称透明——参与者必然可见，其他人不可见；不做情绪评分 K5）
+    await api('POST', '/api/users', { name: 'emp01', password: 'e123456', role: 'sales' });
+    const talkIngest = await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({
+        created_at: new Date().toISOString(), duration_s: 900, owner: 'manager01',
+        scene: 'talk', participants: 'manager01,emp01', topic: '一对一面谈冒烟',
+        transcript: '管理者: 录音我先告知你。方案延期的事，下周起每周五提交周报，我协调测试支援。员工: 我承诺下周三前补上延期模块。',
+      }),
+    });
+    const talk = await talkIngest.json();
+    check('talk 记录入库（显式 scene）', talkIngest.status === 200 && talk.id > 0);
+    r = await api('GET', `/api/communications/${talk.id}`);
+    check('talk 双向承诺骨架（commitments，§4.3）', (r.data?.report?.commitments || []).length >= 1);
+    check('talk 无情绪/评分类字段（K5 红线）', !['emotion', 'attitude', 'score', 'rating', '情绪'].some(k => k in r.data.report));
+    r = await api('GET', '/api/communications?scene=talk');
+    check('场景筛选 talk', (r.data || []).length === 1 && r.data[0].id === talk.id);
+
+    const adminCookie3 = cookie;
+    await api('POST', '/api/login', { name: 'emp01', password: 'e123456' }, false); // 被谈话人（参与者，sales 角色）
+    r = await api('GET', `/api/communications/${talk.id}`);
+    check('INT-40 被谈话人必然可见（即使范围外）', r.status === 200);
+    r = await api('GET', '/api/communications');
+    check('INT-40 参与者列表可见自己参与的谈话', (r.data || []).some(x => x.id === talk.id));
+    await api('POST', '/api/login', { name: 'sales01', password: 's123456' }, false); // 无关销售
+    r = await api('GET', `/api/communications/${talk.id}`);
+    check('INT-40 无关账号详情 403', r.status === 403);
+    r = await api('GET', '/api/communications');
+    check('INT-40 无关账号列表不含谈话记录', !(r.data || []).some(x => x.id === talk.id));
+    const talkExp = await fetch(BASE + `/api/communications/${talk.id}/export`, { headers: { Cookie: cookie } });
+    check('INT-40 无关账号导出 403', talkExp.status === 403);
+    r = await api('POST', '/api/ask', { question: '延期模块的承诺进展如何' });
+    check('INT-40 Ask AI 检索不泄漏谈话记录', r.status === 200 && !(r.data?.sources || []).some(s => s.type === 'comm' && s.id === talk.id));
+    cookie = adminCookie3;
+    await api('POST', '/api/login', { name: 'admin', password: 'admin123' }, false);
+
+    // 场景模板配置域（INT-13）+ 注入
+    r = await api('POST', '/api/config/scene_profiles', { name: '冒烟·周会口径', data: { scene: 'meeting', guide: '决议必须注明负责人' } });
+    const spId = r.data?.id;
+    check('场景模板配置域 CRUD（INT-13）', r.status === 200 && spId > 0);
+    await api('DELETE', `/api/config/scene_profiles/${spId}`);
+
     // 11. 审计
     r = await api('GET', '/api/audit');
     check('审计日志有记录', (r.data || []).some(a => a.action === 'login' && a.user === 'admin'));

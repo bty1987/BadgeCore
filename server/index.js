@@ -32,11 +32,13 @@ const { runRetentionPurge, loadRetention, MIN: RETENTION_MIN } = require('./rete
 const PORT = Number(process.env.PORT || 8200);
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'badgecore.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const CONFIG_DOMAINS = [ // 04 册沟通配置九大域（ADM-01x）+ 知识库/案例库/风险规则/定时报告（04 册 §2 菜单）
+const CONFIG_DOMAINS = [ // 04 册沟通配置九大域（ADM-01x）+ 知识库/案例库/风险规则/定时报告（04 册 §2）+ 场景模板（09 册 INT-13）
   'info_fields', 'deal_models', 'task_models', 'ability_models',
   'summary_templates', 'analysis_dims', 'flows', 'violations', 'competitors',
   'knowledge_base', 'case_library', 'risk_rules', 'scheduled_reports', 'insight_categories',
+  'scene_profiles',
 ];
+const SCENES = ['sales', 'meeting', 'training', 'talk']; // 09 册场景枚举（INT-10）
 const SESSION_TTL = 12 * 3600 * 1000;
 
 const db = openDb(DB_FILE);
@@ -198,22 +200,25 @@ function extractTerms(q) {
   }
   return [...terms].slice(0, 40);
 }
-function searchCommunications(question, scopeSql, scopeParams) {
+function searchCommunications(question, scopeSql, scopeParams, viewer = { role: 'admin', name: '' }) {
   const terms = extractTerms(question);
-  const rows = db.prepare(`SELECT id, created_at, topic, transcript, report FROM communications ${scopeSql} ORDER BY id DESC LIMIT 300`).all(...scopeParams);
+  const rows = db.prepare(`SELECT id, created_at, topic, transcript, report, scene, owner, participants FROM communications ${scopeSql} ORDER BY id DESC LIMIT 300`).all(...scopeParams);
   return rows.map(r => {
     const hay = `${r.topic}\n${r.transcript || ''}\n${r.report || ''}`;
     let score = 0;
     for (const t of terms) if (hay.includes(t)) score++;
     return { ...r, score };
-  }).filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
+  }).filter(r => r.score > 0)
+    .filter(r => canSeeComm(viewer, r)) // talk 记录不进入无权者的检索来源（INT-40）
+    .sort((a, b) => b.score - a.score).slice(0, 5);
 }
 
 /** Ask AI 核心（AI-08）：权限内检索 → LLM/Mock 回答（/api/ask 与 AI-11 定时任务复用） */
 async function answerQuestion(role, name, question) {
-  const scopeSql = role === 'sales' ? 'WHERE owner=?' : '';
-  const scopeParams = role === 'sales' ? [name] : [];
-  const comms = searchCommunications(String(question), scopeSql, scopeParams);
+  // sales 范围并入 talk 参与者可见性（INT-40：被谈话人可检索自己的谈话记录）
+  const scopeSql = role === 'sales' ? "WHERE owner=? OR (scene='talk' AND (owner=? OR participants LIKE ?))" : '';
+  const scopeParams = role === 'sales' ? [name, name, `%${name}%`] : [];
+  const comms = searchCommunications(String(question), scopeSql, scopeParams, { role, name });
   const kbs = db.prepare("SELECT name, data FROM config_items WHERE domain='knowledge_base' AND enabled=1 ORDER BY sort,id").all()
     .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
   const cases = db.prepare("SELECT name, data FROM config_items WHERE domain='case_library' AND enabled=1 ORDER BY sort,id").all()
@@ -252,7 +257,7 @@ async function prepVisitPlan(role, name, customer, notes) {
   const { answer } = await answerQuestion(role, name, `${customer} ${notes || ''}`); // 复用检索作上下文来源
   const llm = getSetting(db, 'llm');
   const kbs = db.prepare("SELECT name FROM config_items WHERE domain='knowledge_base' AND enabled=1").all();
-  const comms = searchCommunications(customer, role === 'sales' ? 'WHERE owner=?' : '', role === 'sales' ? [name] : []);
+  const comms = searchCommunications(customer, role === 'sales' ? 'WHERE owner=?' : '', role === 'sales' ? [name] : [], { role, name });
   if (!llm || llm.provider === 'mock') {
     return {
       customer: customer || '(未填)',
@@ -281,11 +286,19 @@ async function prepVisitPlan(role, name, customer, notes) {
 
 function loadAnalysisConfig() {
   const cfg = {};
-  for (const domain of ['deal_models', 'task_models', 'competitors', 'violations', 'analysis_dims']) {
+  for (const domain of ['deal_models', 'task_models', 'competitors', 'violations', 'analysis_dims', 'scene_profiles']) {
     cfg[domain] = db.prepare('SELECT name, enabled, data FROM config_items WHERE domain=? ORDER BY sort, id').all(domain)
       .map(r => ({ name: r.name, enabled: !!r.enabled, ...(JSON.parse(r.data || '{}')) }));
   }
   return cfg;
+}
+
+/** talk 记录可见性（09 册 INT-40/K4 对称透明）：admin 全见；参与者与归属人可见；其他角色一律不可见 */
+function canSeeComm(me, row) {
+  if (!row || (row.scene !== 'talk')) return true;
+  if (me.role === 'admin') return true;
+  const parts = String(row.participants || '').split(',').map(s => s.trim()).filter(Boolean);
+  return parts.includes(me.name) || (row.owner && row.owner === me.name);
 }
 
 async function runAnalysis(commId, actor) {
@@ -294,10 +307,10 @@ async function runAnalysis(commId, actor) {
   const llm = getSetting(db, 'llm');
   db.prepare('UPDATE communications SET status=? WHERE id=?').run('analyzing', commId);
   try {
-    const report = await analyzeCommunication(llm, row.transcript || '', loadAnalysisConfig());
+    const report = await analyzeCommunication(llm, row.transcript || '', loadAnalysisConfig(), row.scene);
     db.prepare('UPDATE communications SET report=?, status=? WHERE id=?')
       .run(JSON.stringify(report), 'analyzed', commId);
-    audit(db, actor, 'analyze', `comm#${commId}`, `model=${report.meta.model}`);
+    audit(db, actor, 'analyze', `comm#${commId}`, `scene=${row.scene} model=${report.meta.model}`);
     return report;
   } catch (e) {
     db.prepare('UPDATE communications SET status=? WHERE id=?').run('failed', commId);
@@ -351,11 +364,13 @@ async function handleApi(req, res, url) {
 
     // 设备台账（04 册设备管理域）：会话自动注册/上线 + 操作日志
     let boundOwner = '';  // 设备绑定传导：台账里绑了谁，沟通记录就归谁（receiver 未指定时）
+    let deviceScene = ''; // 设备默认场景传导（09 册 INT-12：会议室设备配 default_scene=meeting，入座即录不用标）
     if (b.device) {
       const key = redactText(String(b.device));
-      const dev = db.prepare('SELECT id, owner FROM devices WHERE device_key=?').get(key);
+      const dev = db.prepare('SELECT id, owner, default_scene FROM devices WHERE device_key=?').get(key);
       if (dev) {
         boundOwner = String(dev.owner || '');
+        deviceScene = SCENES.includes(dev.default_scene) ? dev.default_scene : '';
         db.prepare('UPDATE devices SET status=?, last_seen_at=? WHERE id=?').run('online', now, dev.id);
       } else {
         db.prepare('INSERT INTO devices(device_key, model, status, last_seen_at, created_at) VALUES(?,?,?,?,?)')
@@ -363,7 +378,13 @@ async function handleApi(req, res, url) {
       }
     }
 
-    const info = db.prepare('INSERT INTO communications(created_at, duration_s, audio_path, transcript, status, owner, topic, customer_id, plan_id, meta) VALUES(?,?,?,?,?,?,?,?,?,?)')
+    // 场景判定（09 册 INT-10）：入库显式指定 > 设备默认 > sales
+    const scene = SCENES.includes(b.scene) ? b.scene : (deviceScene || 'sales');
+    // 谈话参与者（INT-40：逗分隔姓名；talk 场景缺省至少含归属人，保证被记录者本人可见）
+    const participants = String(b.participants || '').split(/[,，]/).map(s => redactText(s).trim()).filter(Boolean).join(',');
+    const finalParticipants = (scene === 'talk' && !participants) ? String(b.owner || boundOwner || '') : participants;
+
+    const info = db.prepare('INSERT INTO communications(created_at, duration_s, audio_path, transcript, status, owner, topic, customer_id, plan_id, meta, scene, participants) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(
         b.created_at || now,
         Number(b.duration_s) || 0,
@@ -375,6 +396,8 @@ async function handleApi(req, res, url) {
         customerId,
         b.plan_id ? Number(b.plan_id) : null,
         JSON.stringify({ device: b.device || '', source: b.source || 'receiver' }),
+        scene,
+        finalParticipants,
       );
     const id = Number(info.lastInsertRowid);
     audit(db, 'receiver', 'ingest', `comm#${id}`, `${Number(b.duration_s) || 0}s`);
@@ -456,12 +479,16 @@ async function handleApi(req, res, url) {
     return { sql: `owner IN (${owners.map(() => '?').join(',')})`, params: owners };
   };
   if ((m = pathname.match(/^\/api\/communications$/)) && method === 'GET') {
-    const { q = '', status = '' } = Object.fromEntries(url.searchParams);
-    let sql = 'SELECT id, created_at, duration_s, status, owner, topic, customer_id, plan_id, report FROM communications';
+    const { q = '', status = '', scene = '' } = Object.fromEntries(url.searchParams);
+    let sql = 'SELECT id, created_at, duration_s, status, owner, topic, customer_id, plan_id, report, scene, participants FROM communications';
     const where = []; const params = [];
     const scope = myScope();
-    if (scope.sql) { where.push(scope.sql); params.push(...scope.params); }
+    if (scope.sql) { // talk 参与者可见性并入范围条件（INT-40/K4：被谈话人必然能在列表看到自己的谈话记录）
+      where.push(`(${scope.sql} OR (scene='talk' AND (owner=? OR participants LIKE ?)))`);
+      params.push(...scope.params, me.name, `%${me.name}%`);
+    }
     if (status) { where.push('status=?'); params.push(status); }
+    if (scene && SCENES.includes(scene)) { where.push('scene=?'); params.push(scene); }
     if (q) { where.push('(topic LIKE ? OR transcript LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
     if (where.length) sql += ' WHERE ' + where.join(' AND ');
     sql += ' ORDER BY id DESC LIMIT 500';
@@ -469,7 +496,7 @@ async function handleApi(req, res, url) {
       const report = r.report ? JSON.parse(r.report) : null;
       const cust = r.customer_id ? db.prepare('SELECT name FROM customers WHERE id=?').get(r.customer_id) : null;
       return { ...r, report: undefined, customer: cust?.name || null, summary: report?.summary || '', intention: report?.intention || null };
-    });
+    }).filter(r => canSeeComm(me, r)); // talk 记录叠加收紧（INT-40），范围外直接不显示
     return sendJson(res, 200, rows);
   }
   if ((m = pathname.match(/^\/api\/communications\/(\d+)$/))) {
@@ -477,7 +504,12 @@ async function handleApi(req, res, url) {
     const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
     if (!row) throw new HttpError(404, '沟通记录不存在');
     const owners = visibleOwners(me);
-    if (owners && !owners.includes(row.owner)) throw new HttpError(403, '无权访问该记录（数据范围）');
+    if (row.scene === 'talk') {
+      // talk：对称透明优先（INT-40/K4）——参与者/归属人必然可见，其余一律不可见（不受 view_scope 影响）
+      if (!canSeeComm(me, row)) throw new HttpError(403, '无权访问该记录（谈话记录仅参与者可见，INT-40）');
+    } else if (owners && !owners.includes(row.owner)) {
+      throw new HttpError(403, '无权访问该记录（数据范围）');
+    }
     if (method === 'GET') {
       row.report = row.report ? JSON.parse(row.report) : null;
       row.meta = JSON.parse(row.meta || '{}');
@@ -517,6 +549,27 @@ async function handleApi(req, res, url) {
     const report = await runAnalysis(Number(m[1]), me.name);
     return sendJson(res, 200, { ok: true, report });
   }
+  // 场景改标重分析（09 册 INT-11）：切换场景→旧报告版本化留存→按新模板重出报告
+  if ((m = pathname.match(/^\/api\/communications\/(\d+)\/scene$/)) && method === 'POST') {
+    const id = Number(m[1]);
+    const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
+    if (!row) throw new HttpError(404, '沟通记录不存在');
+    if (!canSeeComm(me, row)) throw new HttpError(403, '无权操作该记录');
+    const b = await readBody(req);
+    if (!SCENES.includes(b.scene)) throw new HttpError(400, `scene 须为：${SCENES.join('/')}`);
+    const meta = JSON.parse(row.meta || '{}');
+    meta.history = meta.history || [];
+    if (row.report) meta.history.push({ at: new Date().toISOString(), scene: row.scene, report: JSON.parse(row.report) });
+    const participants = 'participants' in b
+      ? String(b.participants || '').split(/[,，]/).map(s => redactText(String(s)).trim()).filter(Boolean).join(',')
+      : row.participants;
+    const finalParticipants = (b.scene === 'talk' && !participants) ? (row.owner || '') : participants;
+    db.prepare('UPDATE communications SET scene=?, participants=?, meta=? WHERE id=?')
+      .run(b.scene, finalParticipants, JSON.stringify(meta), id);
+    audit(db, me.name, 'scene_change', `comm#${id}`, `${row.scene} → ${b.scene}`);
+    const report = await runAnalysis(id, me.name);
+    return sendJson(res, 200, { ok: true, report, history_count: meta.history.length });
+  }
 
   // 导出（CMP-13：水印=访问者+时间，写审计）
   if ((m = pathname.match(/^\/api\/communications\/(\d+)\/export$/)) && method === 'GET') {
@@ -524,7 +577,9 @@ async function handleApi(req, res, url) {
     const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
     if (!row) throw new HttpError(404, '沟通记录不存在');
     const owners = visibleOwners(me);
-    if (owners && !owners.includes(row.owner)) throw new HttpError(403, '无权导出该记录');
+    if (row.scene === 'talk' ? !canSeeComm(me, row) : (owners && !owners.includes(row.owner))) {
+      throw new HttpError(403, '无权导出该记录（数据范围或谈话记录权限不足，INT-40）');
+    }
     const report = row.report ? JSON.parse(row.report) : null;
     const text = [
       'BadgeCore 沟通记录导出',
@@ -557,6 +612,7 @@ async function handleApi(req, res, url) {
         llm: { ...llm, api_key: undefined, has_api_key: !!llm.api_key },
         retention: loadRetention(db),
         globals: loadGlobals(),
+        receiver: getSetting(db, 'receiver') || { base_url: '' }, // 接收端地址（09 册 INT-02 手动收口代理用）
         ingest_token: me.role === 'admin' ? token : undefined,
       });
     }
@@ -585,6 +641,10 @@ async function handleApi(req, res, url) {
         });
         audit(db, me.name, 'set_globals', JSON.stringify(g).slice(0, 120));
       }
+      if (b.receiver) { // 接收端地址（09 册 INT-02：后台手动收口代理）
+        setSetting(db, 'receiver', { base_url: String(b.receiver.base_url || '').trim().replace(/\/$/, '') });
+        audit(db, me.name, 'set_receiver', String(b.receiver.base_url || '').slice(0, 80));
+      }
       if (b.retention) { // CMP-08：不得低于建议下限
         const r = b.retention;
         for (const k of Object.keys(RETENTION_MIN)) {
@@ -609,6 +669,21 @@ async function handleApi(req, res, url) {
   }
   if (pathname === '/api/silence-check' && method === 'POST' && me.role === 'admin') {
     return sendJson(res, 200, { notified: checkSilence() });
+  }
+  // 手动收口（09 册 INT-02/K6：累积模式的会议缓冲立即聚合入库；代理到接收端 /session/close）
+  if (pathname === '/api/session/close' && method === 'POST' && me.role === 'admin') {
+    const receiver = getSetting(db, 'receiver') || {};
+    if (!receiver.base_url) throw new HttpError(400, '未配置接收端地址（设置页「设备接入」填写 receiver URL）');
+    const b = await readBody(req).catch(() => ({}));
+    const r = await fetch(receiver.base_url.replace(/\/$/, '') + '/session/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device: b.device || '' }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const d = await r.json().catch(() => ({}));
+    audit(db, me.name, 'session_close', b.device || 'all', `receiver=${receiver.base_url} → ${JSON.stringify(d).slice(0, 80)}`);
+    return sendJson(res, r.ok ? 200 : 502, d);
   }
   if (pathname === '/api/llm-test' && method === 'POST') {
     const llm = getSetting(db, 'llm');
@@ -792,7 +867,10 @@ async function handleApi(req, res, url) {
     const b = await readBody(req);
     const dev = db.prepare('SELECT * FROM devices WHERE id=?').get(Number(m[1]));
     if (!dev) throw new HttpError(404, '设备不存在');
-    db.prepare('UPDATE devices SET owner=?, model=? WHERE id=?').run(String(b.owner || ''), String(b.model ?? dev.model), dev.id);
+    db.prepare('UPDATE devices SET owner=?, model=?, default_scene=? WHERE id=?')
+      .run(String(b.owner || ''), String(b.model ?? dev.model),
+        SCENES.includes(b.default_scene) ? b.default_scene
+          : (SCENES.includes(dev.default_scene) ? dev.default_scene : 'sales'), dev.id); // 未指定时保留原值
     db.prepare('INSERT INTO device_logs(device_key, ts, action, detail) VALUES(?,?,?,?)')
       .run(dev.device_key, new Date().toISOString(), b.owner ? 'bind' : 'unbind', `${dev.owner || '-'} → ${b.owner || '(解绑)'}`);
     audit(db, me.name, b.owner ? 'device_bind' : 'device_unbind', dev.device_key, String(b.owner || ''));

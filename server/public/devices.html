@@ -17,10 +17,10 @@
   <div class="card">
     <h2>设备台账（04 册设备管理域；设备录音入库时自动注册上线）</h2>
     <table>
-      <thead><tr><th>设备标识</th><th>型号</th><th>固件</th><th>持有人</th><th>状态</th><th>最近活跃</th><th>操作</th></tr></thead>
+      <thead><tr><th>设备标识</th><th>型号</th><th>固件</th><th>持有人</th><th>默认场景</th><th>状态</th><th>最近活跃</th><th>操作</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
-    <div class="muted" style="margin-top:8px">绑定/解绑写操作日志与审计；固件升级走 receiver OTA 通道（量产期再纳入灰度管理，D16）。</div>
+    <div class="muted" style="margin-top:8px">绑定/解绑写操作日志与审计；固件升级走 receiver OTA 通道（量产期再纳入灰度管理，D16）。默认场景（09 册 INT-12）：该设备录音入库自动标注的场景，会议室设备建议设为「会议」。</div>
   </div>
   <div class="card">
     <h2>操作日志（对标 ★ badge operation-log）</h2>
@@ -44,13 +44,14 @@ async function init() {
     <tr>
       <td>${esc(d.device_key)}</td><td>${esc(d.model) || '-'}</td><td>${esc(d.fw_version) || '-'}</td>
       <td contenteditable id="own-${d.id}">${esc(d.owner)}</td>
+      <td><select id="scene-${d.id}" style="min-width:90px">${[['sales', '销售'], ['meeting', '会议'], ['training', '培训'], ['talk', '谈话']].map(s => `<option value="${s[0]}" ${(d.default_scene || 'sales') === s[0] ? 'selected' : ''}>${s[1]}</option>`).join('')}</select></td>
       <td><span class="badge ${d.status === 'online' ? 'analyzed' : 'low'}">${d.status === 'online' ? '在线' : '离线'}</span></td>
       <td>${fmt(d.last_seen_at)}</td>
       <td>
         <button onclick="bind(${d.id})">保存绑定</button>
         <button class="danger" onclick="unbind(${d.id})">解绑</button>
       </td>
-    </tr>`).join('') || '<tr><td colspan="7" class="muted" style="padding:14px">暂无设备。receiver 入库会话会自动注册设备。</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="8" class="muted" style="padding:14px">暂无设备。receiver 入库会话会自动注册设备。</td></tr>';
   const logs = await (await api('/api/devices/logs')).json();
   $('logs').innerHTML = logs.map(l => `
     <tr><td>${fmt(l.ts)}</td><td>${esc(l.device_key)}</td><td>${ACT[l.action] || l.action}</td><td class="evidence">${esc(l.detail)}</td></tr>`).join('')
@@ -58,11 +59,11 @@ async function init() {
 }
 async function bind(id) {
   await api(`/api/devices/${id}/bind`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ owner: document.getElementById(`own-${id}`).textContent.trim() }) });
+    body: JSON.stringify({ owner: document.getElementById(`own-${id}`).textContent.trim(), default_scene: document.getElementById(`scene-${id}`).value }) });
   init();
 }
 async function unbind(id) {
-  await api(`/api/devices/${id}/bind`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner: '' }) });
+  await api(`/api/devices/${id}/bind`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner: '', default_scene: document.getElementById(`scene-${id}`)?.value || 'sales' }) });
   init();
 }
 init();
