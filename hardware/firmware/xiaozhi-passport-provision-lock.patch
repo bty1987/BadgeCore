@@ -1,0 +1,293 @@
+diff --git a/main/boards/common/wifi_board.cc b/main/boards/common/wifi_board.cc
+index 5b3721d..a82de49 100644
+--- a/main/boards/common/wifi_board.cc
++++ b/main/boards/common/wifi_board.cc
+@@ -17,6 +17,7 @@
+ #include <wifi_manager.h>
+ #include <wifi_station.h>
+ #include <ssid_manager.h>
++#include "ota.h"
+ #ifdef CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
+ #include "blufi.h"
+ #endif
+@@ -26,6 +27,24 @@ static const char *TAG = "WifiBoard";
+ // Connection timeout in seconds
+ static constexpr int CONNECT_TIMEOUT_SEC = 60;
+ 
++// BadgeCore: provisioning AP password ("" = open AP, upstream behavior).
++// Set to block drive-by access to the config portal during the unlocked
++// window. 8..63 chars (WPA2 requirement); enforced in esp-wifi-connect.
++#ifndef BADGE_CONFIG_AP_PASSWORD
++#define BADGE_CONFIG_AP_PASSWORD "badgecore"
++#endif
++
++// BadgeCore managed-device guard: refuse the provisioning portal when the
++// server locked this device (ota.h IsProvisionLocked, NVS persisted).
++// Covers every entry path: button, no-SSID fallback, connect-timeout fallback.
++static bool ProvisionBlocked() {
++    if (!IsProvisionLocked()) {
++        return false;
++    }
++    ESP_LOGW(TAG, "Provisioning is LOCKED (server-managed device); config portal suppressed");
++    return true;
++}
++
+ WifiBoard::WifiBoard() {
+     // Create connection timeout timer
+     esp_timer_create_args_t timer_args = {
+@@ -58,6 +77,7 @@ void WifiBoard::StartNetwork() {
+     config.language = Lang::CODE;
+     config.show_ota_config = true;
+     config.show_sleep_config = true;
++    config.ap_password = BADGE_CONFIG_AP_PASSWORD;
+ 
+     // Set a DHCP hostname so the router shows a friendly name instead of "espressif".
+     // Uses the same "<prefix>-<last 2 MAC bytes>" scheme as the config AP SSID.
+@@ -168,6 +188,10 @@ void WifiBoard::OnWifiConnectTimeout(void* arg) {
+ }
+ 
+ void WifiBoard::StartWifiConfigMode() {
++    if (ProvisionBlocked()) {
++        GetDisplay()->ShowNotification("设备已锁定，禁止重新配网");
++        return;
++    }
+     in_config_mode_ = true;
+     // Transition to wifi configuring state
+     Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);
+@@ -194,6 +218,12 @@ void WifiBoard::StartWifiConfigMode() {
+ 
+ void WifiBoard::EnterWifiConfigMode() {
+     ESP_LOGI(TAG, "EnterWifiConfigMode called");
++    if (ProvisionBlocked()) {
++        // Early return before ResetProtocol/StopStation: stays online so the
++        // server can still push an unlock via the identity channel.
++        GetDisplay()->ShowNotification("设备已锁定，禁止重新配网");
++        return;
++    }
+     GetDisplay()->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE);
+ 
+     auto& app = Application::GetInstance();
+diff --git a/main/ota.cc b/main/ota.cc
+index 07d5116..408eb49 100644
+--- a/main/ota.cc
++++ b/main/ota.cc
+@@ -7,6 +7,7 @@
+ #include <freertos/task.h>
+ #include <cJSON.h>
+ #include <esp_log.h>
++#include <esp_system.h>
+ #include <esp_partition.h>
+ #include <esp_ota_ops.h>
+ #include <esp_app_format.h>
+@@ -21,11 +22,105 @@
+ #include <charconv>
+ #include <cstring>
+ #include <expected>
++#include <mutex>
+ #include <system_error>
+ #include <vector>
+ 
+ #define TAG "Ota"
+ 
++static std::mutex g_identity_mutex;
++static BadgeIdentity g_badge_identity;
++
++BadgeIdentity GetBadgeIdentity() {
++    std::lock_guard<std::mutex> lock(g_identity_mutex);
++    return g_badge_identity;
++}
++
++static std::string GetObjString(const cJSON* obj, const char* field) {
++    const cJSON* item = cJSON_GetObjectItem(obj, field);
++    return (cJSON_IsString(item) && item->valuestring[0] != '\0') ? std::string(item->valuestring)
++                                                                  : std::string();
++}
++
++static void ApplyBadgeIdentity(const BadgeIdentity& bi) {
++    {
++        std::lock_guard<std::mutex> lock(g_identity_mutex);
++        if (bi.valid && bi.text == g_badge_identity.text &&
++            bi.company == g_badge_identity.company) {
++            return;  // unchanged
++        }
++        g_badge_identity = bi;
++    }
++    // Persist as a small JSON object (NVS, survives reboots).
++    cJSON* root = cJSON_CreateObject();
++    auto add = [&root](const char* key, const std::string& value) {
++        if (!value.empty()) {
++            cJSON_AddStringToObject(root, key, value.c_str());
++        }
++    };
++    add("text", bi.text);
++    add("name", bi.name);
++    add("employee_id", bi.employee_id);
++    add("title", bi.title);
++    add("company", bi.company);
++    char* printed = cJSON_PrintUnformatted(root);
++    std::string json = printed != nullptr ? printed : "";
++    cJSON_free(printed);
++    cJSON_Delete(root);
++    if (!json.empty()) {
++        Settings settings("identity", true);
++        settings.SetString("json", json);
++    }
++    ESP_LOGI(TAG, "Badge identity updated (%d bytes)", (int)json.size());
++}
++
++void SetBadgeIdentityFromJson(const cJSON* obj) {
++    if (!cJSON_IsObject(obj)) {
++        return;
++    }
++    BadgeIdentity bi;
++    bi.text = GetObjString(obj, "text");
++    bi.name = GetObjString(obj, "name");
++    bi.employee_id = GetObjString(obj, "employee_id");
++    bi.title = GetObjString(obj, "title");
++    bi.company = GetObjString(obj, "company");
++
++    // Assemble the free-form fallback text from structured fields.
++    if (bi.text.empty()) {
++        const std::string* kLines[] = {&bi.name, &bi.employee_id, &bi.title};
++        for (const std::string* line : kLines) {
++            if (!line->empty()) {
++                if (!bi.text.empty()) {
++                    bi.text += "\n";
++                }
++                bi.text += *line;
++            }
++        }
++    }
++    bi.valid = !bi.text.empty();
++    ApplyBadgeIdentity(bi);
++
++    // BadgeCore provisioning lock: tri-state (field absent = unchanged).
++    // Applied before ApplyBadgeIdentity's unchanged-shortcut so lock commands
++    // land even when the identity text itself is identical.
++    const cJSON* prov_lock = cJSON_GetObjectItem(obj, "provision_lock");
++    if (cJSON_IsTrue(prov_lock)) {
++        Settings settings("badge", true);
++        settings.SetBool("prov_lock", true);
++        ESP_LOGW(TAG, "Provisioning LOCKED (server command)");
++    } else if (cJSON_IsFalse(prov_lock)) {
++        Settings settings("badge", true);
++        settings.EraseKey("prov_lock");
++        ESP_LOGI(TAG, "Provisioning UNLOCKED (server command)");
++    }
++}
++
++bool IsProvisionLocked() {
++    Settings settings("badge");
++    return settings.GetBool("prov_lock", false);
++}
++
++
+ 
+ Ota::Ota() {
+ #ifdef ESP_EFUSE_BLOCK_USR_DATA
+@@ -40,6 +135,31 @@ Ota::Ota() {
+         }
+     }
+ #endif
++    // Restore persisted badge identity: structured JSON first, legacy text fallback.
++    {
++        Settings settings("identity");
++        std::string json = settings.GetString("json");
++        if (!json.empty()) {
++            cJSON* root = cJSON_Parse(json.c_str());
++            if (root != nullptr) {
++                std::lock_guard<std::mutex> lock(g_identity_mutex);
++                g_badge_identity.text = GetObjString(root, "text");
++                g_badge_identity.name = GetObjString(root, "name");
++                g_badge_identity.employee_id = GetObjString(root, "employee_id");
++                g_badge_identity.title = GetObjString(root, "title");
++                g_badge_identity.company = GetObjString(root, "company");
++                g_badge_identity.valid = !g_badge_identity.text.empty();
++                cJSON_Delete(root);
++            }
++        } else {
++            std::string legacy = settings.GetString("text");
++            if (!legacy.empty()) {
++                std::lock_guard<std::mutex> lock(g_identity_mutex);
++                g_badge_identity.text = legacy;
++                g_badge_identity.valid = true;
++            }
++        }
++    }
+ }
+ 
+ Ota::~Ota() {
+@@ -70,6 +190,19 @@ std::unique_ptr<Http> Ota::SetupHttp() {
+     http->SetHeader("Accept-Language", Lang::CODE);
+     http->SetHeader("Content-Type", "application/json");
+ 
++    // BadgeCore heartbeat piggyback: the server harvests device health from
++    // these headers on every version check (boot + idle maintenance tick).
++    {
++        int level = 0;
++        bool charging = false, discharging = false;
++        if (Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
++            http->SetHeader("X-Battery", std::to_string(level));
++            http->SetHeader("X-Charging", charging ? "1" : "0");
++        }
++        http->SetHeader("X-Uptime", std::to_string((int)(esp_timer_get_time() / 1000000LL)));
++        http->SetHeader("X-Heap-Free", std::to_string(esp_get_free_heap_size()));
++    }
++
+     return http;
+ }
+ 
+@@ -215,6 +348,9 @@ NetworkResult<> Ota::CheckVersion() {
+         ESP_LOGW(TAG, "No server_time section found!");
+     }
+ 
++    // Badge identity: server-owned display content for badge-style boards.
++    SetBadgeIdentityFromJson(cJSON_GetObjectItem(root, "identity"));
++
+     has_new_version_ = false;
+     cJSON *firmware = cJSON_GetObjectItem(root, "firmware");
+     if (cJSON_IsObject(firmware)) {
+diff --git a/main/ota.h b/main/ota.h
+index eda3fd7..da57312 100644
+--- a/main/ota.h
++++ b/main/ota.h
+@@ -6,6 +6,7 @@
+ #include <string>
+ #include <vector>
+ 
++#include <cJSON.h>
+ #include <esp_err.h>
+ #include "board.h"
+ #include "network_error.h"
+@@ -58,4 +59,31 @@ private:
+     std::unique_ptr<Http> SetupHttp();
+ };
+ 
++// Badge identity delivered by the server via the OTA "identity" section or the
++// WS {"type":"identity", ...} message. Supported fields: text (free-form
++// fallback) or name / employee_id / title / company (structured badge layout).
++// Persisted in NVS across reboots; board UIs render it while the device is idle.
++struct BadgeIdentity {
++    bool valid = false;
++    std::string text;  // free-form fallback (also auto-assembled from fields)
++    std::string name;
++    std::string employee_id;
++    std::string title;
++    std::string company;
++};
++
++// Returns a copy (written by the OTA/protocol task, read by the LVGL task).
++BadgeIdentity GetBadgeIdentity();
++
++// Extract fields from a JSON object (the identity section itself, or the WS
++// message root) and store them; no-op when nothing changed.
++void SetBadgeIdentityFromJson(const cJSON* obj);
++
++// BadgeCore provisioning lock (受管设备): server-issued via the same identity
++// channels. Persisted in NVS ("badge"/"prov_lock"); while locked the WiFi
++// config portal (AP + web UI, incl. the OTA server address field) is refused.
++// Server sends {"provision_lock": true} to lock, false to unlock, field absent
++// = unchanged. Admin workflow: edit badge-identity.json on the receiver.
++bool IsProvisionLocked();
++
+ #endif // _OTA_H

@@ -121,6 +121,22 @@ powershell -File D:\Espressif\build-passport.ps1 monitor  # 串口监视
 
 **教训**：①删上游管理的 LVGL 对象前，必须 grep 它在全代码库的所有引用点（不只判断过的那几个）；`SetTheme` 这种低频路径（主题刷新）最容易漏。②「升级成功」只代表刷写成功，不代表新固件能活——OTA 循环 = 新固件启动即崩的标准症状。③ESP-IDF 回滚机制（PENDING_VERIFY）在这种场景下正确地保护了设备（始终能退回 2.5.1），循环不停是因为每次 2.5.1 开机都会重新看到「新版」。
 
+## 4.6 配网锁定与受管化（2026-09-26，编译通过待上机）
+
+**威胁**：设备配网入口当前无门槛——无 SSID 开机 / WiFi 连接超时 60s / 按键路径都会开**无密码热点** `Xiaozhi-XXXX`，任何人连上 `192.168.4.1` 即可改 WiFi、**改 OTA 服务器地址**（NVS `wifi`/`ota_url`）——工牌被指向恶意服务器=变成窃听器。受管设备必须封住这个口子。
+
+**方案（D 依据：受管设备原则，业务配置归服务端）**：
+
+1. **配网锁 `provision_lock`（核心）**：服务器经 identity 通道下发（WS `{"type":"identity"}` 与 OTA 响应 `identity` 段同走 `SetBadgeIdentityFromJson`，天然双路），字段三态：`true`=上锁 / `false`=解锁 / 缺失=不变。锁持久 NVS（新 namespace `badge`，key `prov_lock`）。锁定时 `WifiBoard::EnterWifiConfigMode()` 与 `StartWifiConfigMode()` 双拦截（覆盖按键/无 SSID/超时回退全部入口）：不开热点、屏显「设备已锁定，禁止重新配网」、**提前 return 不碰网络连接**（设备保持在线，服务器随时可下发解锁）。
+2. **配网热点密码（防窗口期路人）**：esp-wifi-connect 增加 `ap_password` 配置，WPA2-PSK（8..63 字符，超界回退开放热点+告警日志）；密码编译进固件常量 `BADGE_CONFIG_AP_PASSWORD`（wifi_board.cc，当前 `badgecore`，改一行重编即换）。
+3. **放弃**：OTA 地址白名单（保存时校验域名）——锁定已封死入口，解锁态属管理员受控窗口，不值得对组件做深度侵入。
+
+**管理员操作流**：锁=`badge-identity.json` 加 `"provision_lock": true`（在线设备秒收，离线设备重连 OTA 检查/WS hello 时拿到，≤5 分钟）；解锁=改 `false`（必须显式，删字段不解锁）。**receiver/后台零改动**（identity JSON 字段全透传）。边界诚实声明：物理拆机 + esptool `erase_flash` 可清锁（=完全出厂），属抢夺级攻击不在防线内；锁定设备丢失不必担心数据（录音在服务器不在卡）。
+
+**改动清单**：①fork 3 文件——`ota.h`（`IsProvisionLocked()` 声明）/`ota.cc`（identity 解析加三态处理+NVSO 读写）/`boards/common/wifi_board.cc`（双拦截+AP 密码接线+`BADGE_CONFIG_AP_PASSWORD` 常量）；**导出补丁 `xiaozhi-passport-provision-lock.patch`（⚠️ 对这三文件是累计 diff，含 2.5.7 身份定制部分，干净上游可直接 apply）**；②**managed_components/78__esp-wifi-connect 4 处（不入 git，重装组件需重打——与 §4.1 uart-uhci 同纪律）**：`include/wifi_configuration_ap.h`（`SetApPassword`+成员）、`include/wifi_manager.h`（config 加 `ap_password`）、`wifi_manager.cc` StartConfigAp 透传、`wifi_configuration_ap.cc` StartAccessPoint 按 WPA2-PSK 应用。③坑：IDF v6 的 `wifi_ap_config_t` **已删 `threshold` 成员**（IDF 5.x 写法会编译错），只设 `authmode` 即可。
+
+**验证状态**：`build-passport.ps1 build` RC=0（2.5.8 产物在 build/ **未发布**——冻结发版攒电量数据中，发布=升版本+拷贝 receiver/firmware/ 待用户指令）。上机验收项：锁定后开机不开热点+屏显锁定；下发 `false` 后恢复配网；配网热点需密码。
+
 ## 5. 验收清单（首驾）
 
 - [x] 刷机后开机 → 小智启动（串口实测：`Board: UUID=… SKU=ai-passport`、`AudioCodec: Set output enable`（ES8311）、free sram ~86KB 稳定）
