@@ -28,6 +28,7 @@ const { analyzeCommunication } = require('./analysis');
 const { judgeAttendance, periodsToDaily } = require('./attendance');
 const { redactText } = require('./redact');
 const { runRetentionPurge, loadRetention, MIN: RETENTION_MIN } = require('./retention');
+const wecom = require('./wecom');
 
 const PORT = Number(process.env.PORT || 8200);
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'badgecore.db');
@@ -311,6 +312,7 @@ async function runAnalysis(commId, actor) {
     db.prepare('UPDATE communications SET report=?, status=? WHERE id=?')
       .run(JSON.stringify(report), 'analyzed', commId);
     audit(db, actor, 'analyze', `comm#${commId}`, `scene=${row.scene} model=${report.meta.model}`);
+    if (row.scene === 'meeting') await pushMeetingMinutes(commId, row, report); // 10 册 W1 hook②：纪要摘要卡（开关内）
     return report;
   } catch (e) {
     db.prepare('UPDATE communications SET status=? WHERE id=?').run('failed', commId);
@@ -613,6 +615,7 @@ async function handleApi(req, res, url) {
         retention: loadRetention(db),
         globals: loadGlobals(),
         receiver: getSetting(db, 'receiver') || { base_url: '' }, // 接收端地址（09 册 INT-02 手动收口代理用）
+        wecom_push: { enabled: false, base_url: '', ...(getSetting(db, 'wecom_push') || {}), mode: wecom.pushMode() }, // 10 册 W1
         ingest_token: me.role === 'admin' ? token : undefined,
       });
     }
@@ -644,6 +647,13 @@ async function handleApi(req, res, url) {
       if (b.receiver) { // 接收端地址（09 册 INT-02：后台手动收口代理）
         setSetting(db, 'receiver', { base_url: String(b.receiver.base_url || '').trim().replace(/\/$/, '') });
         audit(db, me.name, 'set_receiver', String(b.receiver.base_url || '').slice(0, 80));
+      }
+      if (b.wecom_push) { // 10 册 W1：企微推送开关（webhook 地址走 env 不入库，凭据不下库）
+        setSetting(db, 'wecom_push', {
+          enabled: !!b.wecom_push.enabled,
+          base_url: String(b.wecom_push.base_url || '').trim().replace(/\/$/, ''),
+        });
+        audit(db, me.name, 'set_wecom_push', `enabled=${!!b.wecom_push.enabled}`, `mode=${wecom.pushMode()}`);
       }
       if (b.retention) { // CMP-08：不得低于建议下限
         const r = b.retention;
@@ -691,6 +701,17 @@ async function handleApi(req, res, url) {
       const r = await analyzeCommunication(llm, '说话人1: 这是连通性测试。说话人2: 收到，明天我把资料发您。', loadAnalysisConfig());
       return sendJson(res, 200, { ok: true, model: r.meta.model, summary: r.summary, todos: r.todos });
     } catch (e) { return sendJson(res, 502, { ok: false, error: e.message }); }
+  }
+
+  // 企微推送连通性测试（10 册 W1，admin）
+  if (pathname === '/api/wecom/test' && method === 'POST' && me.role === 'admin') {
+    const mode = wecom.pushMode();
+    if (mode === 'off') return sendJson(res, 400, { ok: false, error: '企微未配置：需在服务端 env 设置 WECOM_WEBHOOK_URL（群机器人地址）' });
+    try {
+      const r = await wecom.sendWebhook('【BadgeCore】企微推送测试\n这是一条连通性测试消息，收到即通道正常（10 册 W1）。');
+      audit(db, me.name, 'wecom_test', `mode=${mode}`, `errcode=${r.errcode}`);
+      return sendJson(res, 200, { ok: r.ok, mode, errcode: r.errcode });
+    } catch (e) { return sendJson(res, 502, { ok: false, error: String(e.message) }); }
   }
 
   // 九大域配置 CRUD（admin）
@@ -1168,15 +1189,66 @@ async function generateTeamReport(period, refDate, role, name) {
 }
 
 // ---------- 服务器 ----------
-// AI-11 定时报告：执行一个定时任务项（Ask AI 管理员视角检索 → 站内信投递）
+// ---------- 企微推送（10 册 W1：站内信之外的双投通道；webhook 凭据仅 env，开关默认关） ----------
+async function pushWecom(title, markdown, { scene = '' } = {}) {
+  const cfg = getSetting(db, 'wecom_push') || {};
+  if (!cfg.enabled) return;
+  if (scene === 'talk') return; // CMP 红线：谈话纪要不出后台，仅站内信（10 册 §9）
+  const mode = wecom.pushMode();
+  if (mode === 'off') { // 开关开但企微未配置：模拟模式（D11），审计留痕即可
+    audit(db, 'wecom', 'wecom_push_simulated', title, '企微未配置，仅站内信');
+    return;
+  }
+  try {
+    let r;
+    if (mode === 'webhook') {
+      r = await wecom.sendWebhook(`${title}\n${markdown}`);
+    } else { // app 模式（S2）：推给已绑定企微的启用账号；无绑定者则同样留模拟痕
+      const bound = db.prepare("SELECT wecom_userid FROM users WHERE active=1 AND wecom_userid IS NOT NULL AND wecom_userid != ''").all();
+      if (!bound.length) {
+        audit(db, 'wecom', 'wecom_push_simulated', title, 'app 模式但无成员绑定企微，仅站内信');
+        return;
+      }
+      for (const u of bound) r = await wecom.sendAppMessage(u.wecom_userid, `${title}\n${markdown}`);
+    }
+    audit(db, 'wecom', r.ok ? 'wecom_push' : 'wecom_push_failed', title, `mode=${mode} errcode=${r.errcode}`);
+    if (!r.ok) console.error(`[企微推送] errcode=${r.errcode} ${r.errMsg || ''}`);
+  } catch (e) {
+    audit(db, 'wecom', 'wecom_push_failed', title, String(e.message).slice(0, 200));
+    console.error('[企微推送] 失败（不阻塞站内信主投递）:', e.message);
+  }
+}
+
+/** 会议纪要摘要卡（10 册 W1 hook②，INT-23 升级）：仅结构化摘要出域，不带 evidence 原文（CMP 红线） */
+async function pushMeetingMinutes(commId, row, r) {
+  const cfg = getSetting(db, 'wecom_push') || {};
+  const lines = [];
+  if (r.summary) lines.push(String(r.summary).slice(0, 300));
+  const stats = [];
+  if ((r.decisions || []).length) stats.push(`决议 ${r.decisions.length} 项`);
+  if ((r.action_items || []).length) stats.push(`行动项 ${r.action_items.length} 项`);
+  if ((r.disputes || []).length) stats.push(`争议 ${r.disputes.length} 点`);
+  if ((r.open_issues || []).length) stats.push(`未决 ${r.open_issues.length} 项`);
+  if (stats.length) lines.push(stats.join(' · '));
+  for (const [i, t] of (r.action_items || []).slice(0, 5).entries()) {
+    lines.push(`${i + 1}. ${t.what || t.item || ''}（${t.owner || '待定'}${t.due ? '，' + t.due : ''}）`);
+  }
+  if (cfg.base_url) lines.push(`详情：${String(cfg.base_url).replace(/\/$/, '')}/communication.html?id=${commId}`);
+  await pushWecom(`【会议纪要】${row.topic || '#' + commId}`, lines.join('\n'), { scene: row.scene });
+}
+
+// AI-11 定时报告：执行一个定时任务项（Ask AI 管理员视角检索 → 站内信投递 + 企微双投 W1 hook①）
 async function fireScheduledItem(item, manual = false) {
   const d = JSON.parse(item.data || '{}');
   const { answer } = await answerQuestion('admin', 'scheduler', d.question || item.name);
   const recipients = (d.recipients && d.recipients.length) ? d.recipients : ['admin'];
+  const title = `[${item.name}] ${d.time || ''}`;
+  const body = answer + '\n\n（以上内容由 AI 生成，仅供参考）';
   for (const user of recipients) {
     db.prepare('INSERT INTO notifications(user, title, body, created_at) VALUES(?,?,?,?)')
-      .run(user, `[${item.name}] ${d.time || ''}`, answer + '\n\n（以上内容由 AI 生成，仅供参考）', new Date().toISOString());
+      .run(user, title, body, new Date().toISOString());
   }
+  await pushWecom(title, body.slice(0, 1200)); // 10 册 W1 hook①：定时报告企微群双投
   db.prepare('UPDATE config_items SET data=? WHERE id=?').run(JSON.stringify({ ...d, last_fired: new Date().toISOString() }), item.id);
   audit(db, 'scheduler', 'scheduled_report', item.name, `→${recipients.join(',')}${manual ? '（手动触发）' : ''}`);
 }

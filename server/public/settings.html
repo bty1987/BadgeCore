@@ -121,6 +121,26 @@
     <div class="muted" id="recv-close-result" style="margin-top:6px"></div>
   </div>
 
+  <div class="card" id="card-wecom">
+    <h2>企微推送（10 册 W1：定时报告与会议纪要双投企微群）</h2>
+    <div class="grid2">
+      <div>
+        <label>推送开关（默认关；开启后 AI-11 定时报告、会议收口纪要额外推送到企微）</label>
+        <select id="wecom-enabled"><option value="0">关闭（仅站内信）</option><option value="1">开启</option></select>
+        <label>后台外链地址（可选；纪要卡「详情」链接前缀，如 http://&lt;本机IP&gt;:8200）</label>
+        <input id="wecom-base" placeholder="http://<本机IP>:8200">
+      </div>
+      <div>
+        <div style="margin-top:16px">
+          <button class="primary" onclick="saveWecom()">保存</button>
+          <button onclick="testWecom()">发送测试消息</button>
+        </div>
+        <div id="wecom-msg" class="muted" style="margin-top:10px"></div>
+        <div class="muted">群机器人地址走服务端环境变量 <code>WECOM_WEBHOOK_URL</code>（企微群内「添加机器人」获取），不经页面与数据库；未配置时开启也只投站内信（审计留痕，凭据到位仅改 env）。谈话（talk）纪要默认不推企微——10 册 §9 出域红线。</div>
+      </div>
+    </div>
+  </div>
+
   <div class="card" id="card-users">
     <h2>用户与权限（ADM-30x，MVP：sales=本人 / manager·admin=全部）</h2>
     <table id="user-tbl"><thead><tr><th>账号</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
@@ -189,6 +209,12 @@ async function init() {
       `node receiver.js`;
   } else { $('card-recv').style.display = 'none'; }
   if (s.receiver?.base_url) $('recv-url').value = s.receiver.base_url;
+  if (s.wecom_push) {
+    $('wecom-enabled').value = s.wecom_push.enabled ? '1' : '0';
+    $('wecom-base').value = s.wecom_push.base_url || '';
+    const modeTxt = { off: '未配置（服务端 env 设 WECOM_WEBHOOK_URL）', webhook: '群机器人 webhook', app: '自建应用消息' }[s.wecom_push.mode] || s.wecom_push.mode;
+    $('wecom-msg').textContent = `通道状态：${modeTxt}。`;
+  }
   if (s.globals) {
     $('g-view-scope').value = s.globals.view_scope;
     $('g-delete-role').value = s.globals.delete_min_role;
@@ -197,7 +223,7 @@ async function init() {
     $('g-analyze-first').checked = !!s.globals.analyze_first;
   }
   if (ME.role !== 'admin') {
-    $('card-users').style.display = 'none'; $('card-audit').style.display = 'none'; $('card-org').style.display = 'none';
+    $('card-users').style.display = 'none'; $('card-audit').style.display = 'none'; $('card-org').style.display = 'none'; $('card-wecom').style.display = 'none';
   } else {
     loadUsers(); loadAudit(); loadDepts();
   }
@@ -267,6 +293,19 @@ async function saveGlobals() {
   };
   const res = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ globals }) });
   $('g-msg').innerHTML = res.ok ? '<span class="ok">✓ 已保存</span>' : `<span class="err">${(await res.json()).error}</span>`;
+}
+async function saveWecom() {
+  const res = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ wecom_push: { enabled: $('wecom-enabled').value === '1', base_url: $('wecom-base').value.trim() } }) });
+  $('wecom-msg').innerHTML = res.ok ? '<span class="ok">✓ 已保存</span>' : `<span class="err">${(await res.json()).error}</span>`;
+}
+async function testWecom() {
+  $('wecom-msg').textContent = '测试消息发送中…';
+  const res = await api('/api/wecom/test', { method: 'POST' });
+  const d = await res.json();
+  $('wecom-msg').innerHTML = d.ok
+    ? '<span class="ok">✓ 测试消息已送达企微，请到群里确认</span>'
+    : `<span class="err">✗ ${esc(d.error || ('errcode=' + d.errcode))}</span>`;
 }
 async function loadDepts() {
   const depts = await (await api('/api/depts')).json();

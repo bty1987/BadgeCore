@@ -1,16 +1,21 @@
 /**
  * BadgeCore 后台冒烟测试（自包含：临时端口 + 临时库，跑完自动清理）
  * 用法：node smoke-test.js
- * 覆盖：登录/鉴权 → 入库+自动Mock分析 → 列表/详情 → 报告结构 → 九大域CRUD → LLM连通 → 用户/审计
+ * 覆盖：登录/鉴权 → 入库+自动Mock分析 → 列表/详情 → 报告结构 → 九大域CRUD → LLM连通 → 用户/审计 → 企微推送（10 册 W1）
  */
 const { spawn } = require('child_process');
+const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const PORT = 8299;
 const BASE = `http://localhost:${PORT}`;
+const HOOK_PORT = 8297;          // W1 mock 群机器人 webhook（冒烟进程内起）
+const PORT2 = 8298;              // W1 第二服务器实例（env 注入 WECOM_WEBHOOK_URL）
+const BASE2 = `http://127.0.0.1:${PORT2}`;
 const dbFile = path.join(os.tmpdir(), `badgecore-smoke-${Date.now()}.db`);
+const dbFile2 = path.join(os.tmpdir(), `badgecore-smoke-wecom-${Date.now()}.db`);
 let cookie = '';
 let passed = 0, failed = 0;
 
@@ -36,6 +41,110 @@ async function waitReady(child) {
     try { await fetch(BASE + '/login.html'); return true; } catch { await new Promise(r => setTimeout(r, 300)); }
   }
   return false;
+}
+
+// W1 webhook 真实通道套件：进程内 mock 群机器人（记录收到的消息；内容含 W1FAIL 时返回业务错误码）+ 第二服务器实例
+async function runWecomWebhookSuite() {
+  const hookHits = [];
+  const hook = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', c => { b += c; });
+    req.on('end', () => {
+      let d = {}; try { d = JSON.parse(b); } catch { /* 忽略 */ }
+      hookHits.push(d);
+      const content = d?.markdown?.content || '';
+      res.end(JSON.stringify(content.includes('W1FAIL') ? { errcode: 95001, errmsg: 'mock blocked' } : { errcode: 0, errmsg: 'ok' }));
+    });
+  });
+  await new Promise(r => hook.listen(HOOK_PORT, '127.0.0.1', r));
+  const child2 = spawn(process.execPath, [path.join(__dirname, 'index.js')], {
+    env: { ...process.env, PORT: String(PORT2), DB_FILE: dbFile2, WECOM_WEBHOOK_URL: `http://127.0.0.1:${HOOK_PORT}/hook` },
+    stdio: 'ignore',
+  });
+  let cookie2 = '';
+  const api2 = async (method, p, body) => {
+    const res = await fetch(BASE2 + p, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(cookie2 ? { Cookie: cookie2 } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const sc = res.headers.get('set-cookie');
+    if (sc) cookie2 = sc.split(';')[0];
+    let data = null; try { data = await res.json(); } catch { /* 非 JSON */ }
+    return { status: res.status, data };
+  };
+  try {
+    for (let i = 0; i < 30; i++) {
+      try { await fetch(BASE2 + '/login.html'); break; } catch { await new Promise(r => setTimeout(r, 300)); }
+    }
+    let r = await api2('POST', '/api/login', { name: 'admin', password: 'admin123' }, false);
+    check('W1 第二实例登录', r.status === 200);
+    r = await api2('GET', '/api/settings');
+    check('W1 通道状态 webhook（env 注入即切真实，代码零改动）', r.data?.wecom_push?.mode === 'webhook');
+
+    // 默认关：meeting 收口分析不推
+    const meet1 = await fetch(BASE2 + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': (await api2('GET', '/api/settings')).data.ingest_token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 600, scene: 'meeting', topic: 'W1默认关会议',
+        transcript: '说话人1: 周会开始，版本发布定在下周三。说话人2: 测试资源不足，希望协调。' }),
+    });
+    check('W1 会议入库+分析', meet1.status === 200 && (await meet1.json()).analyzed === true);
+    check('W1 开关默认关：不推企微', hookHits.length === 0);
+
+    // 开启后：定时报告推群
+    await api2('PUT', '/api/settings', { wecom_push: { enabled: true, base_url: '' } });
+    r = await api2('POST', '/api/config/scheduled_reports', { name: 'W1晨报', data: { time: '00:00', question: 'W1默认关会议 行动项', recipients: ['admin'] } });
+    const schedId2 = r.data?.id;
+    r = await api2('POST', '/api/scheduled/run', { id: schedId2 });
+    check('W1 定时报告推企微群（markdown errcode=0）', r.status === 200 && hookHits.length === 1 && hookHits[0].msgtype === 'markdown');
+    check('W1 推送内容带任务名', (hookHits[0]?.markdown?.content || '').includes('W1晨报'));
+
+    // meeting 收口：纪要摘要卡（hook②，且仅此一次——分析完成单点触发）
+    const meet2 = await fetch(BASE2 + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': (await api2('GET', '/api/settings')).data.ingest_token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 900, scene: 'meeting', topic: 'W1纪要冒烟会议',
+        transcript: '说话人1: 复盘会开始，决定下周三发版。说话人2: 我认领回归测试，周三前完成。' }),
+    });
+    const meet2Data = await meet2.json();
+    check('W1 会议纪要入库+分析', meet2.status === 200 && meet2Data.analyzed === true);
+    const minutes = hookHits[1]?.markdown?.content || '';
+    check('W1 hook② 纪要摘要卡推群（单点触发不重复）', hookHits.length === 2 && minutes.includes('会议纪要') && minutes.includes('W1纪要冒烟会议'));
+    check('W1 纪要卡含行动项行、不含 evidence 原文（CMP 出域红线）', /行动项 1 项/.test(minutes) && !minutes.includes('【Mock 证据】'));
+
+    // talk 红线：不推群
+    const talk1 = await fetch(BASE2 + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': (await api2('GET', '/api/settings')).data.ingest_token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 300, scene: 'talk', participants: 'admin,a1', topic: 'W1谈话',
+        transcript: '管理者: 双向承诺记录。员工: 确认。' }),
+    });
+    check('W1 talk 入库+分析', talk1.status === 200 && (await talk1.json()).analyzed === true);
+    check('W1 talk 纪要不推企微（10 册 §9 红线）', hookHits.length === 2);
+
+    // 企微业务错误：不阻塞站内信 + 审计留痕（标记放任务名——任务名随标题进推送内容）
+    r = await api2('POST', '/api/config/scheduled_reports', { name: 'W1FAIL晨报', data: { time: '00:00', question: '触发业务错误', recipients: ['admin'] } });
+    const schedBad = r.data?.id;
+    await api2('POST', '/api/scheduled/run', { id: schedBad });
+    check('W1 企微返回业务错误码（errcode!=0）', hookHits.length === 3);
+    r = await api2('GET', '/api/audit');
+    check('W1 失败写审计 wecom_push_failed', (r.data || []).some(a => a.action === 'wecom_push_failed'));
+    r = await api2('GET', '/api/notifications');
+    check('W1 失败不阻塞站内信主投递', (r.data?.rows || []).some(n => n.title.includes('W1FAIL晨报')));
+    // 测试端点
+    r = await api2('POST', '/api/wecom/test');
+    check('W1 连通性测试端点（errcode=0）', r.status === 200 && r.data?.ok === true && hookHits.length === 4);
+    await api2('PUT', '/api/settings', { wecom_push: { enabled: false } });
+    await api2('DELETE', `/api/config/scheduled_reports/${schedId2}`);
+    await api2('DELETE', `/api/config/scheduled_reports/${schedBad}`);
+
+    // users.wecom_userid 迁移列（直查第二实例库）
+    const { DatabaseSync } = require('node:sqlite');
+    const db2 = new DatabaseSync(dbFile2);
+    check('W1 users.wecom_userid 迁移列存在', db2.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'wecom_userid'));
+    db2.close();
+  } finally {
+    child2.kill();
+    hook.close();
+  }
 }
 
 (async () => {
@@ -380,6 +489,24 @@ async function waitReady(child) {
     check('场景模板配置域 CRUD（INT-13）', r.status === 200 && spId > 0);
     await api('DELETE', `/api/config/scene_profiles/${spId}`);
 
+    // 10.10 企微推送·模拟模式（10 册 W1；第一服务器未配 WECOM_* = D11 降级惯例）
+    r = await api('GET', '/api/settings');
+    check('W1 通道状态 off（未配置即模拟）', r.data?.wecom_push?.mode === 'off' && r.data?.wecom_push?.enabled === false);
+    await api('PUT', '/api/settings', { wecom_push: { enabled: true } });
+    r = await api('POST', '/api/config/scheduled_reports', { name: '冒烟企微晨报', data: { time: '00:00', question: '竞品A 提及汇总', recipients: ['admin'] } });
+    const wecomSchedId = r.data?.id;
+    r = await api('POST', '/api/scheduled/run', { id: wecomSchedId });
+    check('W1 开关开+未配置：定时报告执行不报错', r.status === 200);
+    r = await api('GET', '/api/notifications');
+    check('W1 站内信照投（双投主通道不降级）', (r.data?.rows || []).some(n => n.title.includes('冒烟企微晨报')));
+    r = await api('GET', '/api/audit');
+    check('W1 模拟推送审计留痕（D11）', (r.data || []).some(a => a.action === 'wecom_push_simulated'));
+    await api('PUT', '/api/settings', { wecom_push: { enabled: false } });
+    await api('DELETE', `/api/config/scheduled_reports/${wecomSchedId}`);
+
+    // 10.11 企微推送·webhook 真实通道（第二服务器 + 进程内 mock 群机器人）
+    await runWecomWebhookSuite();
+
     // 11. 审计
     r = await api('GET', '/api/audit');
     check('审计日志有记录', (r.data || []).some(a => a.action === 'login' && a.user === 'admin'));
@@ -398,7 +525,7 @@ async function waitReady(child) {
     process.exitCode = 1;
   } finally {
     child.kill();
-    for (const f of [dbFile, dbFile + '-journal', dbFile + '-wal', dbFile + '-shm']) {
+    for (const f of [dbFile, dbFile + '-journal', dbFile + '-wal', dbFile + '-shm', dbFile2, dbFile2 + '-journal', dbFile2 + '-wal', dbFile2 + '-shm']) {
       try { fs.unlinkSync(f); } catch { /* 可能不存在 */ }
     }
   }
