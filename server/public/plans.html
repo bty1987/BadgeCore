@@ -11,7 +11,7 @@
 (async () => {
   const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
   if (!me) { location.href = '/login.html'; return; }
-  const main = mountAppShell('comm', me.name);
+  const main = mountAppShell('comm', me);
   main.innerHTML = `
     <div class="page-head"><h1>沟通计划</h1><span class="spacer"></span>
       <button class="btn primary" onclick="planDlg()">＋ 安排沟通</button></div>

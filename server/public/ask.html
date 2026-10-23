@@ -83,8 +83,7 @@ async function prepVisit() {
     <div class="footnote">以上内容由 AI 生成，仅供参考。</div>`;
 }
 async function init() {
-  document.getElementById('top').innerHTML = adminTopbar('admin');
-  document.getElementById('side').innerHTML = adminSidebar('ask');
+  initShell('ask');
   const me = await (await api('/api/me')).json();
   { const w = document.getElementById('who'); if (w) w.textContent = `${me.name}（${me.role}）`; }
 }

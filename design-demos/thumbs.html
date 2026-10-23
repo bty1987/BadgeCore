@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>BadgeCore 改版 · 六候选缩略图</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #e8e9ec; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; padding: 28px; }
+.grid { display: grid; grid-template-columns: repeat(3, 480px); gap: 26px 26px; justify-content: center; }
+.cell {}
+.cell .frame { width: 480px; height: 300px; border-radius: 6px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.12); position: relative; display: flex; }
+.cell .cap { margin: 10px 2px 0; font-size: 13px; color: #333; }
+.cell .cap b { font-size: 13.5px; }
+.cell .cap span { color: #777; margin-left: 6px; font-size: 12px; }
+svg { display: block; }
+
+/* ============ C1 佐藤可士和 · 一枚徽章（销售首页） ============ */
+.c1 { background: #F2F3F5; font-family: "MiSans","PingFang SC","Microsoft YaHei",sans-serif; }
+.c1 .side { width: 108px; background: #fff; border-right: 1px solid rgba(31,35,41,.06); display: flex; flex-direction: column; padding: 10px 8px; }
+.c1 .ws { display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 6px; background: #F2F3F5; margin-bottom: 12px; }
+.c1 .ws .chip { width: 18px; height: 18px; border-radius: 5px; background: #E8432D; flex: none; }
+.c1 .ws .nm { font-size: 10.5px; font-weight: 700; color: #1F2329; }
+.c1 .ws .cv { margin-left: auto; color: #9AA0AE; font-size: 8px; }
+.c1 .nav { font-size: 10.5px; color: #5A6072; padding: 6px 8px; border-radius: 5px; position: relative; }
+.c1 .nav.on { background: #F2F3F5; color: #1F2329; font-weight: 700; }
+.c1 .nav.on::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: #E8432D; }
+.c1 .me { margin-top: auto; width: 20px; height: 20px; border-radius: 6px; background: #1F2329; color: #fff; font-size: 9px; display: flex; align-items: center; justify-content: center; }
+.c1 .mn { flex: 1; padding: 14px 16px; }
+.c1 .hi { font-size: 15px; font-weight: 700; color: #1F2329; }
+.c1 .hi small { font-weight: 400; color: #9AA0AE; font-size: 9px; margin-left: 6px; }
+.c1 .btn { float: right; background: #E8432D; color: #fff; font-size: 10px; font-weight: 700; border-radius: 6px; padding: 6px 10px; }
+.c1 .punch { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 4px; }
+.c1 .punch .num { font-size: 44px; font-weight: 800; color: #E8432D; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+.c1 .punch .lb { font-size: 11px; color: #5A6072; font-weight: 700; }
+.c1 .punch .sub { font-size: 9px; color: #9AA0AE; }
+.c1 .stats { display: flex; gap: 6px; margin-top: 10px; }
+.c1 .st { flex: 1; background: #fff; border-radius: 6px; padding: 8px 9px; }
+.c1 .st .k { font-size: 8.5px; color: #9AA0AE; }
+.c1 .st .v { font-size: 15px; font-weight: 700; color: #1F2329; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.c1 .todo { margin-top: 10px; background: #fff; border-radius: 6px; padding: 9px 10px; }
+.c1 .todo .t { font-size: 9.5px; font-weight: 700; color: #1F2329; margin-bottom: 5px; }
+.c1 .todo .r { display: flex; gap: 5px; align-items: center; font-size: 9px; color: #5A6072; padding: 3px 0; }
+.c1 .todo .dot { width: 10px; height: 10px; border-radius: 3px; background: #E8432D; opacity: .12; flex: none; }
+
+/* ============ C2 Irma Boom · 九域即九章（管理配置） ============ */
+.c2 { background: #FAFAF7; font-family: "PingFang SC","Source Han Sans SC","Microsoft YaHei",sans-serif; color: #1C1C1A; }
+.c2 .side { width: 118px; background: #FAFAF7; border-right: 1px solid #E5E4DE; padding: 12px 10px; display: flex; flex-direction: column; }
+.c2 .ws { padding-bottom: 8px; border-bottom: 1px solid #E5E4DE; margin-bottom: 8px; }
+.c2 .ws .nm { font-size: 11.5px; font-weight: 700; }
+.c2 .ws .ct { font-size: 8px; color: #A8A79E; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.c2 .idx { display: flex; gap: 6px; align-items: baseline; padding: 4.5px 2px; font-size: 10px; color: #6E6E66; }
+.c2 .idx .no { font-size: 8px; color: #A8A79E; font-family: Consolas, monospace; width: 14px; }
+.c2 .grp { font-size: 8px; color: #A8A79E; letter-spacing: .12em; margin: 5px 0 2px; }
+.c2 .idx.on { color: #1F4E3D; font-weight: 700; background: rgba(31,78,61,.06); border-radius: 3px; }
+.c2 .idx.on .no { color: #1F4E3D; }
+.c2 .mn { flex: 1; padding: 14px 18px 0; }
+.c2 .ch { display: flex; align-items: baseline; gap: 8px; border-bottom: 1px solid #1C1C1A; padding-bottom: 7px; }
+.c2 .ch .no { font-family: Consolas, monospace; font-size: 10px; color: #A8A79E; }
+.c2 .ch .ti { font-size: 14px; font-weight: 700; letter-spacing: .02em; }
+.c2 .ch .en { margin-left: auto; font-size: 8px; color: #A8A79E; letter-spacing: .18em; }
+.c2 table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.c2 th { font-size: 8px; color: #A8A79E; text-align: left; font-weight: 400; letter-spacing: .08em; padding: 6px 6px 5px 0; border-bottom: 1px solid #E5E4DE; }
+.c2 td { font-size: 9.5px; padding: 6.5px 6px 6.5px 0; border-bottom: 1px solid #E5E4DE; color: #1C1C1A; }
+.c2 td.dim { color: #6E6E66; }
+.c2 td .pill { font-size: 8px; color: #1F4E3D; border: 1px solid rgba(31,78,61,.35); border-radius: 2px; padding: 1px 4px; }
+.c2 td .op { color: #1F4E3D; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ============ C3 Attio · 灰阶纪律（表格通铺） ============ */
+.c3 { background: #F7F7F8; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #17171C; }
+.c3 .side { width: 104px; background: #fff; border-right: 1px solid rgba(23,23,28,.06); padding: 10px 8px; display: flex; flex-direction: column; }
+.c3 .ws { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 6px; }
+.c3 .ws:hover { background: #F7F7F8; }
+.c3 .ws .ic { width: 16px; height: 16px; border-radius: 4px; background: #5B5BD6; flex: none; }
+.c3 .ws .nm { font-size: 10.5px; font-weight: 600; }
+.c3 .ws .cv { margin-left: auto; color: #9E9EA6; font-size: 8px; }
+.c3 .nav { font-size: 10px; color: #6F6F78; padding: 5px 8px; border-radius: 5px; margin-top: 1px; }
+.c3 .nav.on { background: #F4F4FF; color: #5B5BD6; font-weight: 600; }
+.c3 .me { margin-top: auto; display: flex; align-items: center; gap: 5px; padding: 4px 6px; }
+.c3 .me .av { width: 18px; height: 18px; border-radius: 50%; background: #E1E1E4; font-size: 8px; display: flex; align-items: center; justify-content: center; color: #6F6F78; }
+.c3 .me .nm { font-size: 9px; color: #6F6F78; }
+.c3 .mn { flex: 1; padding: 12px 14px; }
+.c3 .ph { display: flex; align-items: center; margin-bottom: 8px; }
+.c3 .ph .ti { font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
+.c3 .ph .btn { margin-left: auto; background: #5B5BD6; color: #fff; font-size: 9px; font-weight: 600; border-radius: 6px; padding: 5px 9px; }
+.c3 .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.04); overflow: hidden; }
+.c3 table { width: 100%; border-collapse: collapse; }
+.c3 th { font-size: 8px; color: #9E9EA6; text-align: left; font-weight: 500; padding: 7px 10px; border-bottom: 1px solid rgba(23,23,28,.05); }
+.c3 td { font-size: 9.5px; padding: 7.5px 10px; border-bottom: 1px solid rgba(23,23,28,.05); color: #17171C; position: relative; }
+.c3 tr.sel td:first-child::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #5B5BD6; }
+.c3 td.dim { color: #9E9EA6; font-variant-numeric: tabular-nums; }
+.c3 td .tag { font-size: 8px; color: #4A4A55; background: #F1F1F3; border-radius: 3px; padding: 1.5px 5px; }
+.c3 td .tag.b { color: #5B5BD6; background: #F4F4FF; }
+
+/* ============ C4 飞书 · 淡蓝底分区（销售首页） ============ */
+.c4 { background: #F0F3FA; font-family: "PingFang SC","Microsoft YaHei",sans-serif; color: #1F2329; flex-direction: column; }
+.c4 .top { height: 34px; background: #fff; display: flex; align-items: center; padding: 0 12px; gap: 10px; box-shadow: 0 1px 3px rgba(31,35,41,.05); }
+.c4 .ws { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; }
+.c4 .ws .ic { width: 16px; height: 16px; border-radius: 5px; background: #3370FF; flex: none; }
+.c4 .ws .nm { font-size: 10.5px; font-weight: 600; }
+.c4 .ws .cv { color: #8F959E; font-size: 8px; }
+.c4 .srch { flex: 1; max-width: 200px; margin: 0 auto; background: #F0F3FA; border-radius: 6px; font-size: 9px; color: #8F959E; padding: 4.5px 9px; }
+.c4 .av { width: 18px; height: 18px; border-radius: 50%; background: #3370FF; color: #fff; font-size: 8px; display: flex; align-items: center; justify-content: center; }
+.c4 .bd { flex: 1; display: flex; }
+.c4 .side { width: 96px; background: #fff; border-right: 1px solid rgba(31,35,41,.04); padding: 8px 6px; display: flex; flex-direction: column; }
+.c4 .nav { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #51565F; padding: 6px 8px; border-radius: 6px; position: relative; }
+.c4 .nav .sq { width: 8px; height: 8px; border-radius: 2.5px; background: #C9D7F7; flex: none; }
+.c4 .nav.on { background: #F0F4FF; color: #3370FF; font-weight: 600; }
+.c4 .nav.on .sq { background: #3370FF; }
+.c4 .nav.on::before { content: ''; position: absolute; left: -6px; top: 5px; bottom: 5px; width: 3px; border-radius: 2px; background: #3370FF; }
+.c4 .todo-mini { margin-top: auto; background: #F0F4FF; border-radius: 7px; padding: 7px; }
+.c4 .todo-mini .t { font-size: 8.5px; color: #3370FF; font-weight: 600; margin-bottom: 3px; }
+.c4 .todo-mini .r { font-size: 8px; color: #51565F; padding: 1.5px 0; }
+.c4 .mn { flex: 1; padding: 12px 14px; }
+.c4 .greet { background: #fff; border-radius: 10px; padding: 11px 13px; box-shadow: 0 1px 4px rgba(31,35,41,.06); display: flex; align-items: center; }
+.c4 .greet .tx { font-size: 12.5px; font-weight: 700; }
+.c4 .greet small { font-weight: 400; font-size: 9px; color: #8F959E; margin-left: 6px; }
+.c4 .greet .btn { margin-left: auto; background: #3370FF; color: #fff; font-size: 9.5px; border-radius: 7px; padding: 5.5px 11px; font-weight: 500; }
+.c4 .stats { display: flex; gap: 8px; margin-top: 9px; }
+.c4 .st { flex: 1; background: #fff; border-radius: 10px; padding: 9px 11px; box-shadow: 0 1px 4px rgba(31,35,41,.06); }
+.c4 .st .k { font-size: 8.5px; color: #8F959E; }
+.c4 .st .v { font-size: 16px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.c4 .st .v.blue { color: #3370FF; }
+.c4 .cards { display: flex; gap: 8px; margin-top: 9px; }
+.c4 .cd { flex: 1; background: #fff; border-radius: 10px; padding: 9px 11px; box-shadow: 0 1px 4px rgba(31,35,41,.06); }
+.c4 .cd .t { font-size: 9.5px; font-weight: 600; margin-bottom: 4px; }
+.c4 .cd .r { font-size: 8.5px; color: #51565F; padding: 2.5px 0; border-bottom: 1px solid #F0F3FA; }
+
+/* ============ C5 包豪斯几何（管理后台） ============ */
+.c5 { background: #F5F5F2; font-family: "Manrope","HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",sans-serif; color: #111; }
+.c5 .side { width: 110px; background: #fff; border-right: 2px solid #111; padding: 10px 8px; display: flex; flex-direction: column; }
+.c5 .ws { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 4px; border: 2px solid #111; border-radius: 0; }
+.c5 .ws .sq { width: 14px; height: 14px; background: #0077B6; flex: none; }
+.c5 .ws .ci { width: 14px; height: 14px; border-radius: 50%; background: #FFB703; flex: none; margin-left: -4px; }
+.c5 .ws .nm { font-size: 10px; font-weight: 800; }
+.c5 .grp { display: flex; align-items: center; gap: 5px; font-size: 9.5px; font-weight: 700; color: #111; margin: 6px 0 2px; }
+.c5 .grp .g { width: 7px; height: 7px; flex: none; }
+.c5 .g.bsq { background: #0077B6; }
+.c5 .g.bci { background: #0077B6; border-radius: 50%; }
+.c5 .g.rtr { background: #E63946; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 7px solid #E63946; }
+.c5 .g.yci { background: #FFB703; border-radius: 50%; }
+.c5 .nav { font-size: 9.5px; color: #4A4A4A; padding: 4px 8px 4px 20px; }
+.c5 .nav.on { background: #111; color: #fff; }
+.c5 .mn { flex: 1; padding: 13px 16px; }
+.c5 .ph { font-size: 15px; font-weight: 800; letter-spacing: -.01em; }
+.c5 .ph small { display: block; font-size: 8.5px; color: #4A4A4A; font-weight: 400; margin-top: 2px; }
+.c5 .shapes { display: flex; gap: 10px; margin: 12px 0; }
+.c5 .sh { flex: 1; background: #fff; border: 2px solid #111; padding: 9px 10px; }
+.c5 .sh .fig { height: 16px; display: flex; align-items: center; }
+.c5 .sh .k { font-size: 8.5px; color: #4A4A4A; margin-top: 4px; }
+.c5 .sh .v { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.c5 .sh.yl { background: #FFB703; }
+.c5 .sh.yl .k { color: #111; }
+.c5 .tbl { background: #fff; border: 2px solid #111; }
+.c5 .tbl .rw { display: flex; justify-content: space-between; font-size: 9px; padding: 5.5px 10px; border-bottom: 1px solid #E4E4DE; }
+.c5 .tbl .rw:last-child { border-bottom: none; }
+.c5 .tbl .rw b { font-weight: 700; }
+.c5 .tri { width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 12px solid #E63946; display: inline-block; }
+.c5 .cir { width: 13px; height: 13px; border-radius: 50%; background: #FFB703; display: inline-block; }
+.c5 .sq2 { width: 12px; height: 12px; background: #0077B6; display: inline-block; }
+
+/* ============ C6 香港街招白日版（销售首页） ============ */
+.c6 { background: #FBF6EC; font-family: "Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif; color: #1A1A1A; }
+.c6 .side { width: 104px; background: #FBF6EC; border-right: 2px solid #1A1A1A; padding: 10px 8px; display: flex; flex-direction: column; }
+.c6 .ws { background: #E4322B; color: #fff; border: 2px solid #1A1A1A; box-shadow: 3px 3px 0 rgba(26,26,26,.9); padding: 5px 7px; font-size: 10px; font-weight: 900; display: flex; align-items: center; gap: 5px; margin-bottom: 12px; }
+.c6 .ws .cv { margin-left: auto; font-size: 8px; }
+.c6 .nav { font-size: 10.5px; font-weight: 700; color: #1A1A1A; padding: 5.5px 8px; border: 2px solid transparent; margin-bottom: 3px; }
+.c6 .nav.on { background: #F5B700; border-color: #1A1A1A; box-shadow: 2.5px 2.5px 0 rgba(26,26,26,.9); }
+.c6 .me { margin-top: auto; width: 20px; height: 20px; background: #0B67D0; border: 2px solid #1A1A1A; color: #fff; font-size: 9px; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.c6 .mn { flex: 1; padding: 13px 15px; }
+.c6 .sign { display: inline-block; background: #E4322B; color: #fff; font-size: 13px; font-weight: 900; padding: 5px 11px; border: 2px solid #1A1A1A; box-shadow: 3px 3px 0 rgba(26,26,26,.9); }
+.c6 .wall { display: flex; gap: 9px; margin-top: 13px; }
+.c6 .ad { flex: 1.3; background: #F5B700; border: 2px solid #1A1A1A; box-shadow: 3.5px 3.5px 0 rgba(26,26,26,.9); padding: 10px 11px; }
+.c6 .ad .k { font-size: 9px; font-weight: 700; }
+.c6 .ad .v { font-size: 27px; font-weight: 900; line-height: 1.1; }
+.c6 .ad .s { font-size: 8px; font-weight: 700; }
+.c6 .ad2 { flex: 1; background: #fff; border: 2px solid #1A1A1A; box-shadow: 3.5px 3.5px 0 rgba(26,26,26,.9); padding: 10px 11px; }
+.c6 .ad2 .k { font-size: 9px; color: #555; }
+.c6 .ad2 .v { font-size: 20px; font-weight: 900; }
+.c6 .ad3 { flex: 1; background: #0E9B6C; color: #fff; border: 2px solid #1A1A1A; box-shadow: 3.5px 3.5px 0 rgba(26,26,26,.9); padding: 10px 11px; }
+.c6 .ad3 .k { font-size: 9px; font-weight: 700; }
+.c6 .ad3 .v { font-size: 20px; font-weight: 900; }
+.c6 .board { margin-top: 12px; background: #fff; border: 2px solid #1A1A1A; box-shadow: 3.5px 3.5px 0 rgba(26,26,26,.9); padding: 8px 11px; }
+.c6 .board .t { font-size: 9.5px; font-weight: 900; margin-bottom: 4px; display: inline-block; background: #0B67D0; color: #fff; padding: 1.5px 7px; }
+.c6 .board .r { font-size: 9px; padding: 2.5px 0; border-bottom: 1px dashed #C9BFA8; display: flex; gap: 5px; }
+.c6 .board .r:last-child { border-bottom: none; }
+.c6 .board .tg { font-size: 7.5px; background: #FFF8E7; border: 1px solid #1A1A1A; padding: 0.5px 4px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <!-- C1 -->
+  <div class="cell">
+    <div class="frame c1">
+      <div class="side">
+        <div class="ws"><div class="chip"></div><div class="nm">销售工作台</div><div class="cv">▾</div></div>
+        <div class="nav on">首页</div><div class="nav">沟通</div><div class="nav">客户</div><div class="nav">案例库</div><div class="nav">看板</div>
+        <div class="me">白</div>
+      </div>
+      <div class="mn">
+        <span class="btn">发起沟通</span>
+        <div class="hi">早安，白添宇<small>10月23日 周五</small></div>
+        <div class="punch">
+          <div class="num">6</div>
+          <div><div class="lb">今日待办</div><div class="sub">来自沟通承诺提取</div></div>
+        </div>
+        <div class="stats">
+          <div class="st"><div class="k">本周沟通</div><div class="v">12</div></div>
+          <div class="st"><div class="k">沟通时长</div><div class="v">186′</div></div>
+          <div class="st"><div class="k">客户数</div><div class="v">28</div></div>
+        </div>
+        <div class="todo">
+          <div class="t">今日待办</div>
+          <div class="r"><div class="dot"></div>回访华润张经理，确认二期报价</div>
+          <div class="r"><div class="dot"></div>发送定制方案 v3 给万科采购部</div>
+          <div class="r"><div class="dot"></div>整理上周会议纪要待办清单</div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>C1 佐藤可士和</b><span>一枚徽章 · 朱红只给「今天要做的事」</span></div>
+  </div>
+
+  <!-- C2 -->
+  <div class="cell">
+    <div class="frame c2">
+      <div class="side">
+        <div class="ws"><div class="nm">管理后台</div><div class="ct">9 组 · 23 项</div></div>
+        <div class="grp">沟通配置</div>
+        <div class="idx"><span class="no">01</span>信息收集</div>
+        <div class="idx"><span class="no">02</span>成交模型</div>
+        <div class="idx on"><span class="no">06</span>违规检测</div>
+        <div class="idx"><span class="no">09</span>竞争对手</div>
+        <div class="grp">组织与人员</div>
+        <div class="idx"><span class="no">—</span>组织架构</div>
+        <div class="idx"><span class="no">—</span>角色权限</div>
+      </div>
+      <div class="mn">
+        <div class="ch"><span class="no">06</span><span class="ti">违规检测</span><span class="en">VIOLATIONS</span></div>
+        <table>
+          <tr><th style="width:26%">违规项名称</th><th>触发描述</th><th style="width:14%">条目</th><th style="width:12%">操作</th></tr>
+          <tr><td>诱导仓促签约</td><td class="dim">利用信息差施压使客户仓促签约</td><td><span class="pill">启用</span></td><td><span class="op">编辑</span></td></tr>
+          <tr><td>诱导签约抢单</td><td class="dim">声称同事报价过高、自身可提供更低价格</td><td><span class="pill">启用</span></td><td><span class="op">编辑</span></td></tr>
+          <tr><td>诱导私下交易</td><td class="dim">引导客户款项直接支付给个人或非公司账户</td><td><span class="pill">启用</span></td><td><span class="op">编辑</span></td></tr>
+          <tr><td>承诺零增项</td><td class="dim">以「零增项」绝对不会让你多花一分钱等话术</td><td><span class="pill">启用</span></td><td><span class="op">编辑</span></td></tr>
+          <tr><td>诱导性口头承诺</td><td class="dim">口头承诺赠品、无偿服务并催促放弃书面协议</td><td><span class="pill">停用</span></td><td><span class="op">编辑</span></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="cap"><b>C2 Irma Boom</b><span>九域即九章 · 编号索引 · 发丝线纸墨</span></div>
+  </div>
+
+  <!-- C3 -->
+  <div class="cell">
+    <div class="frame c3">
+      <div class="side">
+        <div class="ws"><div class="ic"></div><div class="nm">销售工作台</div><div class="cv">▾</div></div>
+        <div class="nav on">沟通</div><div class="nav">客户</div><div class="nav">案例库</div><div class="nav">看板</div>
+        <div class="me"><div class="av">白</div><div class="nm">白添宇</div></div>
+      </div>
+      <div class="mn">
+        <div class="ph"><div class="ti">沟通</div><div class="btn">上传录音</div></div>
+        <div class="card">
+          <table>
+            <tr><th>主题</th><th>场景</th><th>状态</th><th>意向</th><th>时间</th></tr>
+            <tr class="sel"><td>华润二期需求沟通</td><td><span class="tag b">销售</span></td><td><span class="tag">已分析</span></td><td class="dim">82 · 高</td><td class="dim">10-23 10:24</td></tr>
+            <tr><td>万科采购部方案评审</td><td><span class="tag">会议</span></td><td><span class="tag">已转写</span></td><td class="dim">—</td><td class="dim">10-22 16:02</td></tr>
+            <tr><td>招商部季度复盘谈话</td><td><span class="tag">谈话</span></td><td><span class="tag">分析中</span></td><td class="dim">—</td><td class="dim">10-22 09:40</td></tr>
+            <tr><td>产品培训第三期</td><td><span class="tag">培训</span></td><td><span class="tag">已分析</span></td><td class="dim">—</td><td class="dim">10-21 14:15</td></tr>
+            <tr><td>保利渠道对接</td><td><span class="tag b">销售</span></td><td><span class="tag">已录制</span></td><td class="dim">—</td><td class="dim">10-20 11:30</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>C3 Attio</b><span>灰阶纪律 · accent ≤5% · 40px 行高</span></div>
+  </div>
+
+  <!-- C4 -->
+  <div class="cell">
+    <div class="frame c4">
+      <div class="top">
+        <div class="ws"><div class="ic"></div><div class="nm">销售工作台</div><div class="cv">▾</div></div>
+        <div class="srch">搜索沟通、客户、配置…</div>
+        <div class="av">白</div>
+      </div>
+      <div class="bd">
+        <div class="side">
+          <div class="nav on"><span class="sq"></span>首页</div>
+          <div class="nav"><span class="sq"></span>沟通</div>
+          <div class="nav"><span class="sq"></span>客户</div>
+          <div class="nav"><span class="sq"></span>案例库</div>
+          <div class="nav"><span class="sq"></span>看板</div>
+          <div class="todo-mini"><div class="t">今日待办 · 6</div><div class="r">· 回访华润张经理</div><div class="r">· 发送定制方案 v3</div></div>
+        </div>
+        <div class="mn">
+          <div class="greet"><div class="tx">早安，白添宇<small>10月23日 周五</small></div><div class="btn">发起沟通</div></div>
+          <div class="stats">
+            <div class="st"><div class="k">本周沟通</div><div class="v blue">12</div></div>
+            <div class="st"><div class="k">客户数</div><div class="v">28</div></div>
+            <div class="st"><div class="k">今日待办</div><div class="v">6</div></div>
+          </div>
+          <div class="cards">
+            <div class="cd"><div class="t">今日日程</div><div class="r">10:30 华润二期需求沟通</div><div class="r">14:00 产品培训第三期</div></div>
+            <div class="cd"><div class="t">情报中心</div><div class="r">保利渠道对接命中风险词</div><div class="r">2 条访前准备建议</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>C4 飞书</b><span>淡蓝底分区 · 激活态三重编码 · 舒服的中文</span></div>
+  </div>
+
+  <!-- C5 -->
+  <div class="cell">
+    <div class="frame c5">
+      <div class="side">
+        <div class="ws"><div class="sq"></div><div class="ci"></div><div class="nm">管理后台 ▾</div></div>
+        <div class="grp"><span class="g bsq"></span>沟通配置</div>
+        <div class="nav on">信息收集</div><div class="nav">成交模型</div><div class="nav">违规检测</div>
+        <div class="grp"><span class="g rtr"></span>风险预警</div>
+        <div class="nav">风险规则</div>
+        <div class="grp"><span class="g yci"></span>组织与人员</div>
+        <div class="nav">组织架构</div>
+      </div>
+      <div class="mn">
+        <div class="ph">今日运营<small>2026年10月23日 周五</small></div>
+        <div class="shapes">
+          <div class="sh yl"><div class="fig"><span class="cir"></span></div><div class="k">今日待办</div><div class="v">6</div></div>
+          <div class="sh"><div class="fig"><span class="tri"></span></div><div class="k">风险命中</div><div class="v">2</div></div>
+          <div class="sh"><div class="fig"><span class="sq2"></span></div><div class="k">本周沟通</div><div class="v">12</div></div>
+        </div>
+        <div class="tbl">
+          <div class="rw"><b>违规项名称</b><span>触发描述</span></div>
+          <div class="rw"><span>诱导仓促签约</span><span>利用信息差施压使客户仓促签约</span></div>
+          <div class="rw"><span>诱导私下交易</span><span>引导款项支付给个人或非公司账户</span></div>
+          <div class="rw"><span>承诺零增项</span><span>「零增项」绝对承诺类话术</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>C5 包豪斯几何</b><span>形状即语义 · 三原色各司其职</span></div>
+  </div>
+
+  <!-- C6 -->
+  <div class="cell">
+    <div class="frame c6">
+      <div class="side">
+        <div class="ws">销售工作台<span class="cv">▾</span></div>
+        <div class="nav on">首页</div><div class="nav">沟通</div><div class="nav">客户</div><div class="nav">案例库</div><div class="nav">看板</div>
+        <div class="me">白</div>
+      </div>
+      <div class="mn">
+        <div class="sign">早安，白添宇！</div>
+        <div class="wall">
+          <div class="ad"><div class="k">今日待办</div><div class="v">6 件</div><div class="s">干完再下班</div></div>
+          <div class="ad2"><div class="k">本周沟通</div><div class="v">12</div></div>
+          <div class="ad3"><div class="k">客户数</div><div class="v">28</div></div>
+        </div>
+        <div class="board">
+          <div class="t">今日日程</div>
+          <div class="r"><span>10:30</span><span>华润二期需求沟通</span><span class="tg">销售</span></div>
+          <div class="r"><span>14:00</span><span>产品培训第三期</span><span class="tg">培训</span></div>
+          <div class="r"><span>16:30</span><span>招商部季度复盘</span><span class="tg">谈话</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>C6 街招白日版</b><span>招牌色块 · 粗黑体 · 硬投影（过猛备选）</span></div>
+  </div>
+
+</div>
+</body>
+</html>

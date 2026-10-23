@@ -1,6 +1,8 @@
 /**
  * BadgeCore 前端公共工具（零依赖）
  * icon(): 内联线性 SVG 图标系统；api(); toast(); dlg(); 表格/表单渲染助手
+ * Shell v3「淡蓝底分区」：单一壳 = 顶栏(搜索/通知/账户) + 侧栏(工作区切换器+菜单)
+ * 销售工作台 / 管理后台 两侧同构，切换器带记忆（Ctrl+Shift+S 快速翻转）
  */
 /* ---------- 图标库（24x24 线性，stroke 随 currentColor） ---------- */
 const ICONS = {
@@ -47,7 +49,7 @@ const ICONS = {
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2.5"/><path d="M8 21h8M12 17v4"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/>',
-  chev: '<path d="M9 6l6 6-6 6"/>',
+  chevdown: '<path d="M6 9l6 6 6-6"/>',
 };
 /** 输出内联线性 SVG 图标 */
 function icon(name, size = 16, cls = '') {
@@ -73,14 +75,12 @@ function toast(msg) {
   t.textContent = msg; t.classList.add('show');
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200);
 }
-/** 弹窗：dlg.open({title, body(html), foot([{label,cls,onClick}])})；返回 close 函数 */
+/** 弹窗：dlg.open({title, body(html), foot([{label,cls,onClick}])}；返回 close 函数 */
 function dlg() {
   const mask = document.createElement('div');
   mask.className = 'mask';
   document.body.appendChild(mask);
-  const api = {
-    close() { mask.remove(); },
-  };
+  const api = { close() { mask.remove(); } };
   return {
     open({ title, body, foot, wide }) {
       mask.classList.add('show');
@@ -105,93 +105,285 @@ function dlg() {
 }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function fmtTime(s) { return s ? s.replace('T', ' ').slice(0, 16) : '-'; }
-/** 通用 CRUD 表格页渲染：mountCrud({mountEl, title, items, columns, onNew, onEdit, onDelete, tabs}) */
+/** 通用表格渲染：renderTable(mount, columns, rows, ops) */
 function renderTable(mount, columns, rows, ops) {
   if (!rows.length) {
-    mount.innerHTML = `<div class="empty"><div class="empty-badge">${icon('inbox', 30)}</div>暂无数据</div>`;
+    mount.innerHTML = `<div class="empty"><div class="empty-badge">${icon('inbox', 28)}</div>暂无数据</div>`;
     return;
   }
   const head = columns.map(c => `<th style="${c.w ? 'width:' + c.w : ''}">${c.title}</th>`).join('') + (ops ? '<th class="ops">操作</th>' : '');
   const body = rows.map((r, i) => '<tr>' + columns.map(c => `<td>${c.render ? c.render(r) : esc(r[c.key])}</td>`).join('') +
     (ops ? `<td class="ops">${ops(r, i)}</td>` : '') + '</tr>').join('');
-  mount.innerHTML = `<div style="overflow-x:auto"><table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  mount.innerHTML = `<div style="background:var(--card);border-radius:10px;box-shadow:var(--shadow-card);overflow:hidden"><div style="overflow-x:auto"><table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
-/** 管理后台侧边栏（对照截图菜单树，线性图标版） */
-function adminSidebar(active, me) {
-  const G = [
-    ['沟通配置', 'sliders', [
-      ['info_fields', '信息收集', 'file-text', '/config.html?domain=info_fields'],
-      ['deal_models', '成交模型', 'target', '/config.html?domain=deal_models'],
-      ['task_models', '任务模型', 'list-check', '/config.html?domain=task_models'],
-      ['ability_models', '能力模型', 'gauge', '/config.html?domain=ability_models'],
-      ['summary_templates', '沟通总结', 'message', '/config.html?domain=summary_templates'],
-      ['analysis_dims', '沟通分析', 'sliders', '/config.html?domain=analysis_dims'],
-      ['flows', '沟通流程', 'route', '/config.html?domain=flows'],
-      ['violations', '违规检测', 'octagon', '/config.html?domain=violations'],
-      ['competitors', '竞争对手', 'flag', '/config.html?domain=competitors'],
-    ]],
-    ['沟通计划', 'calendar', [['plans', '字段设置', 'calendar', '/config.html?domain=info_fields&group=plans']]],
-    ['客户管理', 'users', [
-      ['cust_list', '客户列表', 'users', '/customers.html'],
-      ['cust_fields', '字段设置', 'file-text', '/config.html?domain=info_fields'],
-      ['cust_profile', '画像配置', 'layers', '/config.html?domain=insight_categories'],
-    ]],
-    ['洞察配置', 'sparkles', [['insight', '分类配置', 'sparkles', '/config.html?domain=insight_categories']]],
-    ['风险预警', 'alert', [['risk', '风险预警', 'alert', '/config.html?domain=risk_rules']]],
-    ['知识库', 'database', [['knowledge', '知识库', 'database', '/config.html?domain=knowledge_base']]],
-    ['案例库', 'trophy', [['cases', '案例库', 'trophy', '/config.html?domain=case_library']]],
-    ['全局配置', 'gear', [['global', '全局配置', 'gear', '/settings.html']]],
-    ['Ask AI', 'bot', [['ask', 'Ask AI', 'bot', '/ask.html']]],
-    ['我的企业', 'building', [
-      ['org', '组织架构', 'building', '/org.html'],
-      ['employees', '员工名册', 'user', '/org.html?tab=emp'],
-      ['roles', '角色权限', 'shield', '/roles.html'],
-    ]],
-  ];
-  return `<div class="sidebar">${G.map(([g, gIcon, items]) => `
-    <div class="group">${icon(gIcon, 14)}${g}</div>
-    ${items.map(([key, name, ic, href]) => `<a class="item ${key === active ? 'active' : ''}" href="${href}">${icon(ic, 15)}<span>${name}</span></a>`).join('')}
-  `).join('')}</div>`;
-}
-function adminTopbar(tab) {
-  return `<div class="topbar">
-    <div class="brand"><span class="logo"></span>管理后台</div>
-    <div class="tabs"><a href="/index.html" class="${tab === 'app' ? 'active' : ''}">销售助手</a><a href="/settings.html" class="${tab === 'admin' ? 'active' : ''}">我的企业</a></div>
-    <div class="right"><span id="_me"></span><div class="avatar" id="_av">管</div><a href="/api/logout" style="color:var(--text-2);display:flex;align-items:center;gap:4px">${icon('logout', 14)}退出</a></div>
-  </div>`;
-}
-/** 拉取当前用户并填充顶栏 */
-async function loadMe() {
-  try {
-    const me = await api('/api/me');
-    const el = document.getElementById('_me');
-    if (el) el.textContent = me.name;
-    const av = document.getElementById('_av');
-    if (av) av.textContent = (me.name || '管')[0];
-    return me;
-  } catch { return null; }
-}
-/** 销售端窄边栏（对照 01-coach-home 截图：线性图标版） */
-function appSidebar(active, meName) {
+
+/* ================= Shell v3：单一壳 ================= */
+
+const WS_HOME = { sales: '/index.html', admin: '/dashboard.html' };
+/** 管理端落点：上次访问的管理页（initShell 写入），无记录回数据看板 */
+const adminTarget = () => { try { return localStorage.getItem('bc.admin.last') || WS_HOME.admin; } catch { return WS_HOME.admin; } };
+const WS_NAME = { sales: '销售工作台', admin: '管理后台' };
+const WS_DESC = { sales: '我的沟通、客户与今日待办', admin: '九域配置、组织与数据看板' };
+const WS_ICON = { sales: 'mic', admin: 'shield' };
+
+/** 销售侧菜单（sales 角色无看板入口，服务端 403） */
+function salesNav(role) {
   const N = [
     ['home', 'home', '首页', '/index.html'],
     ['comm', 'mic', '沟通', '/communications.html'],
     ['cust', 'users', '客户', '/customers.html'],
     ['cases', 'trophy', '案例库', '/cases.html'],
-    ['dash', 'chart', '看板', '/dashboard.html'],
   ];
-  return `<div class="appbar">
-    <div class="logo"></div>
-    ${N.map(([k, ic, name, href]) => `<a class="nav ${k === active ? 'active' : ''}" href="${href}">${icon(ic, 19)}<span>${name}</span></a>`).join('')}
-    <div class="me" title="${esc(meName || '')}" onclick="location.href='/settings.html'">${esc((meName || '我')[0])}</div>
+  if (role && role !== 'sales') N.push(['dash', 'chart', '看板', '/dashboard.html']);
+  return N;
+}
+/** 管理侧菜单（组 → 项；key 与 config domain / 页面锚点一致） */
+function adminNav() {
+  return [
+    ['沟通配置', 'sliders', [
+      ['info_fields', 'file-text', '信息收集', '/config.html?domain=info_fields'],
+      ['deal_models', 'target', '成交模型', '/config.html?domain=deal_models'],
+      ['task_models', 'list-check', '任务模型', '/config.html?domain=task_models'],
+      ['ability_models', 'gauge', '能力模型', '/config.html?domain=ability_models'],
+      ['summary_templates', 'message', '沟通总结', '/config.html?domain=summary_templates'],
+      ['analysis_dims', 'sliders', '沟通分析', '/config.html?domain=analysis_dims'],
+      ['flows', 'route', '沟通流程', '/config.html?domain=flows'],
+      ['violations', 'octagon', '违规检测', '/config.html?domain=violations'],
+      ['competitors', 'flag', '竞争对手', '/config.html?domain=competitors'],
+    ]],
+    ['沟通计划', 'calendar', [['plans', 'calendar', '计划字段', '/config.html?domain=info_fields&group=plans']]],
+    ['客户管理', 'users', [
+      ['customers', 'users', '客户列表', '/customers.html'],
+      ['cust_fields', 'file-text', '客户字段', '/config.html?domain=info_fields'],
+      ['insight_categories', 'layers', '画像配置', '/config.html?domain=insight_categories'],
+    ]],
+    ['风险预警', 'alert', [['risk_rules', 'alert', '风险预警', '/config.html?domain=risk_rules']]],
+    ['知识库', 'database', [
+      ['knowledge_base', 'database', '知识库', '/config.html?domain=knowledge_base'],
+      ['case_library', 'trophy', '案例库', '/config.html?domain=case_library'],
+    ]],
+    ['数据与设备', 'chart', [
+      ['dashboard', 'chart', '数据看板', '/dashboard.html'],
+      ['devices', 'monitor', '设备接入', '/devices.html'],
+      ['attendance', 'calendar', '考勤统计', '/attendance.html'],
+    ]],
+    ['组织与人员', 'building', [
+      ['org', 'building', '组织架构', '/org.html'],
+      ['emp', 'user', '员工名册', '/org.html?tab=emp'],
+      ['roles', 'shield', '角色权限', '/roles.html'],
+    ]],
+    ['全局', 'gear', [
+      ['settings', 'gear', '全局配置', '/settings.html'],
+      ['ask', 'bot', 'Ask AI', '/ask.html'],
+    ]],
+  ];
+}
+
+let _shellWS = 'sales';   // 当前页面所属工作区
+let _shellMe = null;
+
+function navHTML(ws, active, me) {
+  const item = ([k, i, n, href]) =>
+    `<a class="nav-item ${k === active ? 'on' : ''}" data-key="${k}" href="${href}">${icon(i, 16)}<span>${n}</span></a>`;
+  if (ws === 'sales') return salesNav(me && me.role).map(item).join('');
+  return adminNav().map(([g, gi, items]) =>
+    `<div class="nav-group">${icon(gi, 12)}${g}</div>` + items.map(item).join('')
+  ).join('');
+}
+
+function topbarHTML(me) {
+  const canAdmin = me && me.role !== 'sales';
+  return `<div class="topbar">
+    <div class="brand"><span class="logo"></span>BadgeCore</div>
+    <div class="global-search" id="gs">
+      ${icon('search', 14)}<input id="gs-input" type="text" placeholder="搜索沟通、客户、配置…"><span class="kbd">Ctrl K</span>
+    </div>
+    <button class="top-ic" id="bell-btn" title="消息" aria-label="消息" onclick="location.href='/notifications.html'">${icon('bell', 17)}</button>
+    <div class="account">
+      <button class="avatar" id="av-btn" aria-haspopup="menu" aria-expanded="false" title="${esc(me ? me.name : '')}">${esc((me && me.name || '我')[0])}</button>
+      <div class="acc-menu" id="acc-menu" role="menu">
+        <div class="acc-head"><b>${esc(me ? me.name : '')}</b><span>${esc(me ? me.role : '')}</span></div>
+        ${canAdmin ? `<button onclick="location.href='/settings.html'">${icon('user', 14)}个人设置</button>` : ''}
+        <button onclick="location.href='/api/logout'">${icon('logout', 14)}退出登录</button>
+      </div>
+    </div>
   </div>`;
 }
-/** 销售端页面骨架挂载：document.body 前置 appbar，返回主容器 */
-function mountAppShell(active, meName) {
-  document.body.insertAdjacentHTML('afterbegin', appSidebar(active, meName));
+
+function sidebarHTML(ws, active, me) {
+  const canAdmin = me && me.role !== 'sales';
+  return `<div class="sidebar">
+    <button class="ws-btn" id="ws-btn" aria-haspopup="menu" aria-expanded="false" title="切换工作区 (Ctrl+Shift+S)">
+      <span class="ws-chip" id="ws-chip" style="background:var(--primary-grad)">${icon(WS_ICON[ws], 14)}</span>
+      <span class="ws-name">${WS_NAME[ws]}</span>
+      <span class="ws-chev">${icon('chevdown', 14)}</span>
+    </button>
+    <nav class="nav-scroll" id="nav-scroll" data-active="${active}">${navHTML(ws, active, me)}</nav>
+    ${ws === 'sales' ? `<div class="side-todo" id="side-todo"><div class="t">今日待办<span class="n" id="td-n">-</span><a class="more" href="/communications.html">全部</a></div><div id="td-rows"><div class="r empty">加载中…</div></div></div>` : ''}
+  </div>
+  <div class="ws-menu" id="ws-menu" role="menu" aria-label="切换工作区">
+    <button class="ws-opt" role="menuitemradio" data-ws="sales" aria-checked="${ws === 'sales'}">
+      <span class="ws-chip" style="background:var(--primary-grad)">${icon('mic', 14)}</span>
+      <span style="min-width:0"><span class="t">销售工作台 <span class="ck">${icon('check', 14)}</span></span><span class="d">${WS_DESC.sales}</span></span>
+    </button>
+    ${canAdmin ? `<button class="ws-opt" role="menuitemradio" data-ws="admin" aria-checked="${ws === 'admin'}">
+      <span class="ws-chip" style="background:linear-gradient(135deg,#1F2329,#51565F)">${icon('shield', 14)}</span>
+      <span style="min-width:0"><span class="t">管理后台 <span class="ck">${icon('check', 14)}</span></span><span class="d">${WS_DESC.admin}</span></span>
+    </button>` : ''}
+    <div class="ws-foot">Ctrl+Shift+S 快速切换</div>
+  </div>`;
+}
+
+function wireShell() {
+  const wsBtn = document.getElementById('ws-btn');
+  const wsMenu = document.getElementById('ws-menu');
+  const openWS = () => {
+    const r = wsBtn.getBoundingClientRect();
+    wsMenu.style.left = r.left + 'px';
+    wsMenu.style.top = (r.bottom + 6) + 'px';
+    wsMenu.classList.add('show');
+    wsBtn.setAttribute('aria-expanded', 'true');
+  };
+  const closeWS = () => { wsMenu.classList.remove('show'); wsBtn.setAttribute('aria-expanded', 'false'); };
+  wsBtn.addEventListener('click', (e) => { e.stopPropagation(); wsMenu.classList.contains('show') ? closeWS() : openWS(); });
+  wsMenu.addEventListener('click', (e) => e.stopPropagation());
+  wsMenu.querySelectorAll('.ws-opt').forEach(o => o.addEventListener('click', () => {
+    const t = o.dataset.ws;
+    if (t === _shellWS) { closeWS(); return; }
+    location.href = t === 'admin' ? adminTarget() : WS_HOME.sales;
+  }));
+  document.addEventListener('click', () => {
+    if (wsMenu) closeWS();
+    const am = document.getElementById('acc-menu');
+    if (am) { am.classList.remove('show'); document.getElementById('av-btn').setAttribute('aria-expanded', 'false'); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeWS(); const am = document.getElementById('acc-menu'); if (am) am.classList.remove('show'); }
+    const canAdmin = _shellMe && _shellMe.role !== 'sales';
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'S' || e.key === 's') && canAdmin) {
+      e.preventDefault();
+      const t = _shellWS === 'sales' ? 'admin' : 'sales';
+      location.href = t === 'admin' ? adminTarget() : WS_HOME.sales;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      const gi = document.getElementById('gs-input');
+      if (gi) gi.focus();
+    }
+  });
+  // 全局搜索 → 沟通列表
+  const gs = document.getElementById('gs-input');
+  if (gs) gs.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && gs.value.trim()) location.href = '/communications.html?q=' + encodeURIComponent(gs.value.trim());
+  });
+  // 账户菜单
+  const avBtn = document.getElementById('av-btn');
+  const accMenu = document.getElementById('acc-menu');
+  avBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const show = !accMenu.classList.contains('show');
+    accMenu.classList.toggle('show', show);
+    avBtn.setAttribute('aria-expanded', String(show));
+  });
+  accMenu.addEventListener('click', (e) => e.stopPropagation());
+}
+
+/** 销售侧栏「今日待办」迷你摘要（异步填充，失败静默） */
+async function fillSideTodo() {
+  try {
+    const comms = await api('/api/communications');
+    const todos = [];
+    for (const c of comms.slice(0, 20)) {
+      if (!c.report) continue;
+      try { const rp = JSON.parse(c.report); (rp.todos || []).forEach(t => todos.push(t)); } catch {}
+    }
+    const n = document.getElementById('td-n'), rows = document.getElementById('td-rows');
+    if (!n || !rows) return;
+    n.textContent = todos.length;
+    rows.innerHTML = todos.length
+      ? todos.slice(0, 3).map((t, i) => `<div class="r" onclick="location.href='/communications.html'"><i class="${i === 0 ? 'hot' : ''}"></i><span>${esc(t.what)}</span></div>`).join('')
+      : '<div class="r empty">今日暂无待办</div>';
+  } catch {}
+}
+
+/** 拉取当前用户（401 跳登录） */
+async function fetchMe() {
+  try { return await api('/api/me'); } catch { return null; }
+}
+
+/**
+ * 管理端壳：填充页面既有的 #top / #side 容器。
+ * initShell('violations') / initShell('org') / initShell('emp') …
+ */
+async function initShell(active) {
+  const me = await fetchMe();
+  if (!me) { location.href = '/login.html'; return null; }
+  _shellWS = 'admin'; _shellMe = me;
+  localStorage.setItem('bc.admin.last', location.pathname + location.search);
+  const top = document.getElementById('top');
+  const side = document.getElementById('side');
+  if (top) top.innerHTML = topbarHTML(me);
+  if (side) side.innerHTML = sidebarHTML('admin', active, me);
+  else document.body.insertAdjacentHTML('afterbegin', topbarHTML(me) + sidebarHTML('admin', active, me));
+  wireShell();
+  notifyBadge();
+  return me;
+}
+
+/** 销售端壳：body 前置顶栏+侧栏，返回主容器（pages: mountAppShell('comm', me)） */
+function mountAppShell(active, me) {
+  // 兼容旧签名（传 name 字符串）：内部自行补拉 me
+  _shellWS = 'sales';
+  if (me && typeof me === 'string') {
+    const main = mountAppShellShellOnly(active, null);
+    fetchMe().then(m => { if (!m) { location.href = '/login.html'; return; } _shellMe = m; fillShellUser(m); fillSideTodo(); });
+    return main;
+  }
+  _shellMe = me;
+  const main = mountAppShellShellOnly(active, me);
+  fillSideTodo();
+  return main;
+}
+function mountAppShellShellOnly(active, me) {
+  document.body.insertAdjacentHTML('afterbegin', topbarHTML(me) + sidebarHTML('sales', active, me));
+  wireShell();
   const main = document.createElement('div');
   main.className = 'appmain';
   document.body.appendChild(main);
+  notifyBadge();
   return main;
 }
+function fillShellUser(me) {
+  const av = document.getElementById('av-btn');
+  if (av) av.textContent = (me.name || '我')[0];
+  const head = document.querySelector('#acc-menu .acc-head');
+  if (head) head.innerHTML = `<b>${esc(me.name)}</b><span>${esc(me.role)}</span>`;
+  // 权限补渲染：销售角色看不到管理后台选项
+  if (me.role === 'sales') {
+    const adminOpt = document.querySelector('.ws-opt[data-ws="admin"]');
+    if (adminOpt) adminOpt.remove();
+  }
+  const nav = document.getElementById('nav-scroll');
+  if (nav && _shellWS === 'sales') nav.innerHTML = navHTML('sales', nav.dataset.active || 'home', me);
+}
+/** 通知未读红点（失败静默） */
+async function notifyBadge() {
+  try {
+    const d = await api('/api/notifications');
+    const bell = document.getElementById('bell-btn');
+    if (bell && d.unread > 0 && !bell.querySelector('.dot')) bell.insertAdjacentHTML('beforeend', '<span class="dot"></span>');
+  } catch {}
+}
+/** 管理端页内切换 domain 时移动激活态（不重建壳） */
+function setActiveNav(key) {
+  document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('on', a.dataset.key === key));
+}
+
+/* 站点图标（品牌蓝圆角方），消除 favicon 404 */
+(function () {
+  const svg = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="9" fill="%233370FF"/></svg>'.replace('%233370FF', '#3370FF'));
+  const l = document.createElement('link');
+  l.rel = 'icon'; l.href = svg;
+  document.head.appendChild(l);
+})();
 document.addEventListener('DOMContentLoaded', () => { if (!document.getElementById('toast')) { const t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); } });

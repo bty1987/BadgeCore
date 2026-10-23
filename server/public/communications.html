@@ -11,7 +11,7 @@
 (async () => {
   const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
   if (!me) { location.href = '/login.html'; return; }
-  const main = mountAppShell('comm', me.name);
+  const main = mountAppShell('comm', me);
   main.innerHTML = `
     <div class="page-head"><h1>沟通</h1><span class="spacer"></span>
       <button class="btn" onclick="location.href='/plans.html'">沟通计划</button>
@@ -66,6 +66,8 @@
     if (r && r.ok) { toast('上传成功，转写分析中'); setTimeout(load, 1500); }
     else { toast(r && r.status !== 404 ? '上传失败' : '当前版本未开启文件上传入口（REC-03 排期中），可由接收服务自动入库'); load(); }
   };
+  const urlQ = new URLSearchParams(location.search).get('q');
+  if (urlQ) document.getElementById('q').value = urlQ;
   load();
 })();
 </script>

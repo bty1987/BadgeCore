@@ -11,7 +11,7 @@
 (async () => {
   const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
   if (!me) { location.href = '/login.html'; return; }
-  const main = mountAppShell('cases', me.name);
+  const main = mountAppShell('cases', me);
   main.innerHTML = `
     <div class="page-head"><h1>案例库</h1>
       <span style="color:var(--text-2);font-size:13px">优秀客户案例 · 金牌话术（Ask AI 检索来源）</span>

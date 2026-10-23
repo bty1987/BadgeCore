@@ -165,9 +165,7 @@ async function toggleUser(id, active) {
   toast(active ? '已启用' : '已禁用'); load();
 }
 function init() {
-  document.getElementById('top').innerHTML = adminTopbar('admin');
-  document.getElementById('side').innerHTML = adminSidebar('');
-  loadMe();
+  initShell('org');
   load();
 }
 init();

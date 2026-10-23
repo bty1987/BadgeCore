@@ -12,7 +12,7 @@ const id = new URLSearchParams(location.search).get('id');
 (async () => {
   const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
   if (!me) { location.href = '/login.html'; return; }
-  const main = mountAppShell('comm', me.name);
+  const main = mountAppShell('comm', me);
   if (!id) { main.innerHTML = '<div class="card">缺少 id 参数</div>'; return; }
   const c = await api('/api/communications/' + id);
   let rp = c.report && typeof c.report === 'object' ? c.report : (typeof c.report === 'string' ? (() => { try { return JSON.parse(c.report); } catch { return null; } })() : null);
@@ -37,7 +37,7 @@ const id = new URLSearchParams(location.search).get('id');
     <div class="card" id="pane0">${c.transcript ? renderTranscript(c.transcript) : '<div class="empty"><div class="icon">🎙️</div>转写尚未完成</div>'}</div>
     <div id="pane1" style="display:none">
       <div class="card" style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:10px">全文摘要（ANA-01）</div>
-        <div style="line-height:2;color:var(--text)">${rp?.summary ? esc(rp.summary) : '<div class="empty"><div class="icon">📝</div>暂无摘要，等待分析完成</div>'}</div></div>
+        <div style="line-height:2;color:var(--text)">${rp?.summary ? esc(rp.summary) : '<div class="empty"><div class="empty-badge">' + icon('file-text', 20) + '</div>暂无摘要，等待分析完成</div>'}</div></div>
       ${rp?.key_facts?.length ? '<div class="card"><div style="font-weight:600;margin-bottom:10px">关键信息抽取</div><table class="tbl"><tbody>' + rp.key_facts.map(kf => '<tr><td style="width:150px;color:var(--text-2)">' + esc(kf.k) + '</td><td>' + esc(kf.v) + '</td></tr>').join('') + '</tbody></table></div>' : ''}
     </div>
     <div id="pane2" style="display:none">${renderReport(rp, curScene)}</div>
@@ -75,22 +75,22 @@ const id = new URLSearchParams(location.search).get('id');
   };
   function renderActionPane(rp, scene) {
     if (scene === 'meeting') {
-      if (!rp?.action_items?.length) return '<div class="empty"><div class="icon">☑️</div>暂无行动项（会上承诺自动提取）</div>';
-      return rp.action_items.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6">☑️ ${esc(t.what)} ${t.owner ? `<span class="tag info">${esc(t.owner)}</span>` : ''} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
+      if (!rp?.action_items?.length) return '<div class="empty"><div class="empty-badge">' + icon('list-check', 20) + '</div>暂无行动项（会上承诺自动提取）</div>';
+      return rp.action_items.map(t => `<div style="padding:9px 0;border-bottom:1px solid #F0F2F7"><span style="color:var(--primary);margin-right:6px">${icon('check', 14)}</span>${esc(t.what)} ${t.owner ? `<span class="tag info">${esc(t.owner)}</span>` : ''} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
     }
     if (scene === 'training') {
-      if (!rp?.quiz?.length) return '<div class="empty"><div class="icon">📝</div>暂无考核题（培训效果检验）</div>';
+      if (!rp?.quiz?.length) return '<div class="empty"><div class="empty-badge">' + icon('file-text', 20) + '</div>暂无考核题（培训效果检验）</div>';
       return rp.quiz.map((q, i) => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6"><b>${i + 1}. ${esc(q.question)}</b><div style="color:var(--text-2);margin-top:4px">参考答案：${esc(q.answer || '')}</div></div>`).join('');
     }
     if (scene === 'talk') {
-      if (!rp?.commitments?.length) return '<div class="empty"><div class="icon">🤝</div>未提取到双向承诺（事实层记录，不做评价）</div>';
+      if (!rp?.commitments?.length) return '<div class="empty"><div class="empty-badge">' + icon('users', 20) + '</div>未提取到双向承诺（事实层记录，不做评价）</div>';
       return rp.commitments.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6"><span class="tag ${t.by === '管理者' ? 'warn' : 'info'}">${esc(t.by || '?')}承诺</span> ${esc(t.what)} ${t.due ? `<span class="tag warn">时限 ${esc(t.due)}</span>` : ''}</div>`).join('');
     }
-    if (!rp?.todos?.length) return '<div class="empty"><div class="icon">☑️</div>暂无待办（从承诺事项自动提取）</div>';
-    return rp.todos.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6">☑️ ${esc(t.what)} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
+    if (!rp?.todos?.length) return '<div class="empty"><div class="empty-badge">' + icon('list-check', 20) + '</div>暂无待办（从承诺事项自动提取）</div>';
+    return rp.todos.map(t => `<div style="padding:9px 0;border-bottom:1px solid #F0F2F7"><span style="color:var(--primary);margin-right:6px">${icon('check', 14)}</span>${esc(t.what)} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
   }
   function renderReport(rp, scene) {
-    if (!rp) return '<div class="empty"><div class="icon">🤖</div>暂无分析结果。点击右上角「重新分析」生成。</div>';
+    if (!rp) return '<div class="empty"><div class="empty-badge">' + icon('bot', 20) + '</div>暂无分析结果。点击右上角「重新分析」生成。</div>';
     const sec = (title, inner) => `<div class="card" style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:10px">${title}</div>${inner}</div>`;
     const list = arr => '<ul style="margin:8px 0 0 18px;line-height:1.9">' + (arr || []).map(s => `<li>${esc(s)}</li>`).join('') + '<li style="list-style:none;color:var(--text-3)">' + ((arr || []).length ? '' : '无') + '</li></ul>';
     // —— 会议纪要（09 册 §4.1）——
@@ -100,7 +100,7 @@ const id = new URLSearchParams(location.search).get('id');
           <div style="margin-top:4px"><span class="tag on">结论</span> ${esc(t.conclusion || '')}</div>
           <div style="color:var(--text-2);font-size:13px;margin-top:2px">讨论：${esc(t.discussion || '')}</div></div>`).join('') || '无');
       html += sec('会议决议', (rp.decisions || []).length ? (rp.decisions || []).map(d => `
-        <div style="padding:8px 0;border-bottom:1px solid #f3f4f6">✅ ${esc(d.what)} ${d.owner ? `<span class="tag info">负责：${esc(d.owner)}</span>` : ''}
+        <div style="padding:8px 0;border-bottom:1px solid #F0F2F7"><span style="color:var(--success);margin-right:6px">${icon('check', 14)}</span>${esc(d.what)} ${d.owner ? `<span class="tag info">负责：${esc(d.owner)}</span>` : ''}
           <div style="color:var(--text-3);font-size:12.5px;margin-top:3px">依据：${esc(d.evidence || '')}</div></div>`).join('') : '<span style="color:var(--text-3)">未检出明确决议（讨论未定项见下方未决事项）</span>');
       html += sec('争议点', (rp.disputes || []).length ? (rp.disputes || []).map(d => `
         <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><b>${esc(d.topic || '-')}</b>

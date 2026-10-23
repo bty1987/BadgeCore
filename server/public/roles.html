@@ -78,9 +78,7 @@ const ROLES = [
 ];
 let SEL = 'admin';
 function init() {
-  document.getElementById('top').innerHTML = adminTopbar('admin');
-  document.getElementById('side').innerHTML = adminSidebar('');
-  loadMe();
+  initShell('roles');
   render();
 }
 function render() {

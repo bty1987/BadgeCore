@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方向二 · 九域即九章（Irma Boom）— BadgeCore 改版提案</title>
+<!--
+Design decisions (C2 · Irma Boom「九域即九章」):
+- 编号即导航：九个沟通配置域 = 一本书的九章，侧栏做成带等宽编号 01–09 的索引；配置工作被译成「编纂手册」
+- 纸墨关系：暖纸白 #FAFAF7 + 墨黑 #1C1C1A，分区仅 1px 铅笔灰发丝线；去卡片化，内容直接排在纸面上
+- 密度即美：表格行高 40px、内容 13px、列头 12px 加 0.08em 字距——像书末索引一样密而清晰
+- 唯一彩色 = 墨绿 #1F4E3D，只给激活态与主按钮；无阴影、近直角 4px
+- 切换：方案 A+ 单一壳 + 侧栏顶部「卷标条」切换器（工作区名 + 页码式计数），Ctrl/Cmd+Shift+S 翻转
+-->
+<style>
+:root {
+  --paper: #FAFAF7; --paper-2: #F3F2ED;
+  --ink: #1C1C1A; --ink-2: #6E6E66; --ink-3: #6B6A62;
+  --hair: #E5E4DE; --hair-2: #EEEEE8;
+  --green: #1F4E3D; --green-bg: rgba(31, 78, 61, .07);
+  --side-w: 240px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: "PingFang SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+  background: var(--paper); color: var(--ink); font-size: 14px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--green); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+button { font-family: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.mono { font-family: "SF Mono", Consolas, "Courier New", monospace; font-variant-numeric: tabular-nums; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- 壳 ---------- */
+.shell { display: flex; min-height: 100vh; }
+.sidebar {
+  width: var(--side-w); background: var(--paper); border-right: 1px solid var(--hair);
+  display: flex; flex-direction: column; position: fixed; top: 0; bottom: 0; left: 0; z-index: 20;
+}
+/* 卷标条切换器 */
+.ws-btn {
+  margin: 14px 16px 10px; padding: 0 2px 10px; width: calc(100% - 32px);
+  display: flex; align-items: baseline; gap: 8px;
+  background: none; border: 0; border-bottom: 1px solid var(--ink); border-radius: 0; text-align: left;
+}
+.ws-btn .nm { font-size: 16px; font-weight: 700; letter-spacing: .02em; }
+.ws-btn .ct { font-size: 12px; color: var(--ink-3); }
+.ws-btn .cv { margin-left: auto; color: var(--ink-2); font-size: 11px; transition: transform .15s; }
+.ws-btn[aria-expanded="true"] .cv { transform: rotate(180deg); }
+.ws-menu {
+  position: fixed; z-index: 60; width: 300px; background: #FFFFFF;
+  border: 1px solid var(--hair); padding: 8px; display: none;
+}
+.ws-menu.show { display: block; }
+.ws-opt {
+  width: 100%; display: flex; gap: 12px; align-items: baseline; text-align: left;
+  padding: 11px 12px; border: 0; background: none;
+}
+.ws-opt:hover { background: var(--paper-2); }
+.ws-opt .t { font-size: 14.5px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.ws-opt .d { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.ws-opt .no { font-size: 12px; color: var(--ink-3); width: 20px; flex: none; }
+.ws-opt .ck { margin-left: auto; color: var(--green); visibility: hidden; font-size: 13px; }
+.ws-opt[aria-checked="true"] .ck { visibility: visible; }
+.ws-opt[aria-checked="true"] { background: var(--paper-2); }
+.ws-menu .foot { border-top: 1px solid var(--hair); margin-top: 6px; padding: 8px 12px 4px; font-size: 12px; color: var(--ink-3); }
+
+/* 索引侧栏 */
+.nav-scroll { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
+.nav-group { font-size: 12px; color: var(--ink-3); letter-spacing: .14em; padding: 16px 0 5px; }
+.nav-item {
+  display: flex; align-items: baseline; gap: 9px; padding: 6.5px 8px; margin: 1px 0;
+  color: var(--ink-2); font-size: 13.5px;
+}
+.nav-item .no { font-size: 12px; color: var(--ink-3); width: 18px; flex: none; }
+.nav-item:hover { background: var(--paper-2); color: var(--ink); text-decoration: none; }
+.nav-item.on { color: var(--green); font-weight: 700; background: var(--green-bg); }
+.nav-item.on .no { color: var(--green); }
+/* 账户 */
+.account { position: relative; border-top: 1px solid var(--hair); margin: 8px 16px 0; padding: 12px 0 14px; }
+.acc-btn { width: 100%; display: flex; align-items: baseline; gap: 8px; background: none; border: 0; text-align: left; }
+.acc-btn:hover .acc-name { color: var(--green); }
+.acc-name { font-size: 13.5px; font-weight: 700; }
+.acc-role { font-size: 12px; color: var(--ink-3); }
+.acc-out { margin-left: auto; font-size: 12px; color: var(--ink-3); }
+.acc-out:hover { color: var(--green); }
+
+/* ---------- 主区：去卡片化，直接排在纸面上 ---------- */
+.main { flex: 1; margin-left: var(--side-w); padding: 30px 40px 48px; min-width: 0; }
+.chapter-head { display: flex; align-items: baseline; gap: 12px; border-bottom: 1.5px solid var(--ink); padding-bottom: 10px; margin-bottom: 6px; }
+.chapter-head .no { font-size: 13px; color: var(--ink-3); }
+.chapter-head h1 { font-size: 22px; font-weight: 700; letter-spacing: .03em; }
+.chapter-head .en { margin-left: auto; font-size: 12px; color: var(--ink-3); letter-spacing: .22em; }
+.chapter-sub { display: flex; align-items: center; padding: 9px 0 14px; font-size: 12.5px; color: var(--ink-2); border-bottom: 1px solid var(--hair); }
+.chapter-sub .sp { flex: 1; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 15px;
+  border: 1px solid var(--ink); background: none; color: var(--ink);
+  font-size: 13px; border-radius: 0; transition: background .12s, color .12s;
+}
+.btn:hover { background: var(--paper-2); }
+.btn svg { width: 14px; height: 14px; }
+.btn.primary { background: var(--green); border-color: var(--green); color: #fff; }
+.btn.primary:hover { background: #17402F; }
+.btn.sm { height: 28px; padding: 0 11px; font-size: 12px; }
+.btn-text { border: 0; background: none; color: var(--green); font-size: 13px; padding: 4px 2px; }
+.btn-text:hover { text-decoration: underline; text-underline-offset: 3px; }
+.btn-text.danger { color: #8C2F23; }
+
+/* 章内节（tabs）：下划线式 */
+.sects { display: flex; gap: 22px; margin: 14px 0 4px; }
+.sects button { border: 0; background: none; padding: 6px 2px; font-size: 13.5px; color: var(--ink-2); border-bottom: 2px solid transparent; }
+.sects button.on { color: var(--ink); font-weight: 700; border-bottom-color: var(--green); }
+
+/* 表：书末索引 */
+table.tbl { width: 100%; border-collapse: collapse; }
+.tbl th { text-align: left; font-size: 12px; font-weight: 400; color: var(--ink-3); letter-spacing: .08em; padding: 10px 14px 8px 0; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+.tbl td { font-size: 13px; padding: 9.5px 14px 9.5px 0; border-bottom: 1px solid var(--hair-2); vertical-align: top; line-height: 1.5; }
+.tbl tbody tr:hover td { background: #F5F4EF; }
+.tbl .ops { white-space: nowrap; }
+.tbl .ops .btn-text { margin-right: 12px; }
+.entry-name { font-weight: 700; }
+.entry-sub { color: var(--ink-3); font-size: 12px; margin-top: 1px; }
+.trig { color: var(--ink-2); }
+
+/* 状态：小型方框章（深色文字） */
+.stamp { display: inline-block; font-size: 12px; padding: 0 7px; line-height: 1.9; border-radius: 2px; font-weight: 500; }
+.stamp.on { color: var(--green); border: 1px solid rgba(31,78,61,.4); }
+.stamp.off { color: var(--ink-3); border: 1px solid var(--hair); }
+.stamp.red { color: #8C2F23; border: 1px solid rgba(140,47,35,.4); }
+.stamp.amber { color: #7A5200; border: 1px solid rgba(122,82,0,.35); }
+.stamp.blue { color: #274F8E; border: 1px solid rgba(39,79,142,.35); }
+
+/* 销售首页：今日页 */
+.today-head { display: flex; align-items: baseline; gap: 14px; }
+.today-head .date { font-size: 12px; color: var(--ink-3); letter-spacing: .1em; }
+.today-figure { display: flex; align-items: baseline; gap: 12px; margin: 22px 0 6px; }
+.today-figure .big { font-size: 54px; font-weight: 700; letter-spacing: -.01em; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
+.today-figure .lab { font-size: 14px; color: var(--ink-2); }
+.today-figure .act { margin-left: auto; }
+.ledger { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); margin-top: 16px; }
+.ledger .cell { padding: 14px 18px 14px 0; }
+.ledger .cell + .cell { border-left: 1px solid var(--hair); padding-left: 18px; }
+.ledger .k { font-size: 12px; color: var(--ink-3); letter-spacing: .06em; }
+.ledger .v { font-size: 26px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.ledger .s { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 26px; }
+.col-t { display: flex; align-items: baseline; font-size: 13px; font-weight: 700; letter-spacing: .04em; border-bottom: 1px solid var(--ink); padding-bottom: 7px; }
+.col-t .more { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--ink-3); }
+.li { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--hair-2); font-size: 13.5px; }
+.li:last-child { border-bottom: 0; }
+.li .tm { color: var(--ink-3); font-size: 12px; width: 40px; flex: none; font-variant-numeric: tabular-nums; }
+.li .grow { flex: 1; min-width: 0; }
+.li .meta { color: var(--ink-3); font-size: 12px; }
+.blank { color: var(--ink-3); font-size: 12.5px; padding: 14px 0; font-style: italic; }
+.muse { font-size: 12px; color: var(--ink-3); padding-top: 10px; font-style: italic; }
+
+/* toast */
+#toast { position: fixed; top: 20px; left: 50%; transform: translate(-50%, -8px); background: var(--ink); color: var(--paper); padding: 9px 20px; font-size: 13px; opacity: 0; pointer-events: none; transition: all .22s; z-index: 99; }
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+.mt { margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <button class="ws-btn" id="ws-btn" aria-haspopup="menu" aria-expanded="false" title="切换工作区 (Ctrl+Shift+S)">
+      <span class="nm" id="ws-name">销售工作台</span>
+      <span class="ct" id="ws-count">5 项</span>
+      <span class="cv">▾</span>
+    </button>
+    <nav class="nav-scroll" id="nav"></nav>
+    <div class="account">
+      <button class="acc-btn" id="acc-btn" aria-haspopup="menu" aria-expanded="false">
+        <span class="acc-name">白添宇</span><span class="acc-role" id="acc-role">销售 · 管理员</span>
+        <span class="acc-out" id="acc-out">退出 ⏎</span>
+      </button>
+    </div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+
+<div class="ws-menu" id="ws-menu" role="menu" aria-label="切换工作区">
+  <button class="ws-opt" role="menuitemradio" data-ws="sales" aria-checked="true">
+    <span class="no mono">01</span>
+    <span><span class="t">销售工作台 <span class="ck">✓</span></span><span class="d">我的沟通、客户与今日待办</span></span>
+  </button>
+  <button class="ws-opt" role="menuitemradio" data-ws="admin" aria-checked="false">
+    <span class="no mono">02</span>
+    <span><span class="t">管理后台 <span class="ck">✓</span></span><span class="d">九域配置、组织与数据看板</span></span>
+  </button>
+  <div class="foot">上次访问：管理后台 · 违规检测 &nbsp;·&nbsp; Ctrl+Shift+S 快速切换</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const ICONS = {
+  upload: '<path d="M12 16V4M6 10l6-6 6 6M4 20h16"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+};
+function ic(name, sz = 14) {
+  return `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+}
+function toast(msg) {
+  let t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+const WORKSPACES = {
+  sales: {
+    name: '销售工作台', count: '5 项', role: '销售 · 管理员', lastPage: '首页',
+    nav: [
+      ['今日', '01', true], ['沟通', '02', false], ['客户', '03', false], ['案例库', '04', false], ['看板', '05', false],
+    ],
+  },
+  admin: {
+    name: '管理后台', count: '9 组 · 23 项', role: '管理员', lastPage: '违规检测',
+    groups: [
+      ['沟通配置 · 九域', [
+        ['信息收集', '01', false], ['成交模型', '02', false], ['任务模型', '03', false],
+        ['能力模型', '04', false], ['沟通总结', '05', false], ['沟通分析', '06', false],
+        ['沟通流程', '07', false], ['违规检测', '08', true], ['竞争对手', '09', false],
+      ]],
+      ['沟通计划', [['计划字段', '—', false]]],
+      ['客户管理', [['客户列表', '—', false], ['客户字段', '—', false], ['画像配置', '—', false]]],
+      ['洞察与风险', [['分类配置', '—', false], ['风险预警', '—', false]]],
+      ['知识库', [['知识库', '—', false], ['案例库', '—', false]]],
+      ['组织与人员', [['组织架构', '—', false], ['员工名册', '—', false], ['角色权限', '—', false]]],
+      ['全局', [['全局配置', '—', false], ['Ask AI', '—', false]]],
+    ],
+  },
+};
+
+let current = 'sales';
+const $ = (s) => document.querySelector(s);
+
+function renderNav(ws) {
+  const W = WORKSPACES[ws];
+  if (ws === 'sales') {
+    return W.nav.map(([n, no, on]) =>
+      `<a class="nav-item ${on ? 'on' : ''}" href="javascript:void 0" onclick="toast('演示原型：打开${n}')"><span class="no mono">${no}</span><span>${n}</span></a>`).join('');
+  }
+  return W.groups.map(([g, items]) =>
+    `<div class="nav-group">${g}</div>` +
+    items.map(([n, no, on]) => `<a class="nav-item ${on ? 'on' : ''}" href="javascript:void 0" onclick="toast('演示原型：打开${n}')"><span class="no mono">${no}</span><span>${n}</span></a>`).join('')
+  ).join('');
+}
+
+function renderMain(ws) {
+  if (ws === 'sales') return `
+    <div class="today-head"><h1 style="font-size:24px;font-weight:700;letter-spacing:.02em">今日</h1><span class="date">2026 · 10 · 23 周五</span>
+      <span class="act" style="margin-left:auto;display:flex;gap:10px">
+        <button class="btn" onclick="toast('演示原型：上传录音')">${ic('upload')}上传录音</button>
+        <button class="btn primary" onclick="toast('演示原型：发起沟通')">${ic('plus')}发起沟通</button>
+      </span></div>
+    <div class="today-figure">
+      <span class="big">6</span><span class="lab">件今日待办 · 来自沟通承诺提取，其中 2 件已到期</span>
+      <span class="act"><button class="btn-text" onclick="toast('演示原型：打开全部待办')">翻阅全部待办</button></span>
+    </div>
+    <div class="ledger">
+      <div class="cell"><div class="k">本周沟通</div><div class="v">12</div><div class="s">累计 23 次</div></div>
+      <div class="cell"><div class="k">沟通时长</div><div class="v">186′</div><div class="s">本周 · 分钟</div></div>
+      <div class="cell"><div class="k">名下客户</div><div class="v">28</div><div class="s">本人</div></div>
+    </div>
+    <div class="cols">
+      <div>
+        <div class="col-t">今日日程<a class="more" href="javascript:void 0" onclick="toast('演示原型：全部日程')">全部日程</a></div>
+        <div class="li"><span class="tm">10:30</span><span class="grow">华润二期需求沟通<span class="meta"> · 销售沟通</span></span></div>
+        <div class="li"><span class="tm">14:00</span><span class="grow">产品培训第三期<span class="meta"> · 培训</span></span></div>
+        <div class="blank">今日无其余日程。</div>
+      </div>
+      <div>
+        <div class="col-t">今日待办<a class="more" href="javascript:void 0" onclick="toast('演示原型：全部待办')">全部待办</a></div>
+        <div class="li"><span class="tm">到期</span><span class="grow">回访华润张经理，确认二期报价 <span class="stamp red" style="margin-left:4px">已到期</span></span></div>
+        <div class="li"><span class="tm">今天</span><span class="grow">发送定制方案 v3 给万科采购部</span></div>
+        <div class="li"><span class="tm">今天</span><span class="grow">整理上周会议纪要行动项</span></div>
+        <div class="muse">准备十个好问题，胜过准备十套话术。</div>
+      </div>
+    </div>
+    <div class="cols" style="grid-template-columns:1fr">
+      <div>
+        <div class="col-t">情报中心<span class="more">访前准备 · 风险提醒</span></div>
+        <div class="li"><span class="tm">10-21</span><span class="grow"><a href="javascript:void 0" onclick="toast('演示原型：打开沟通详情')">保利渠道对接</a> 命中风险词「竞对报价」 <span class="stamp red" style="margin-left:4px">风险提示</span></span></div>
+        <div class="li"><span class="tm">10-23</span><span class="grow">华润张经理：上次提到预算审批在月底，访前可准备分期方案 <span class="stamp blue" style="margin-left:4px">访前准备</span></span></div>
+      </div>
+    </div>`;
+  return `
+    <div class="chapter-head"><span class="no mono">08</span><h1>违规检测</h1><span class="en">VIOLATIONS</span></div>
+    <div class="chapter-sub">配置违规判定条目，新增后立即对新增沟通生效（04 册 ADM-01x）。语义判活由 AI 结合对话上下文判定。
+      <span class="sp"></span>
+      <button class="btn sm" style="margin-right:10px" onclick="toast('演示原型：导入')">导入</button>
+      <button class="btn sm primary" onclick="toast('演示原型：新建违规项')">${ic('plus', 12)}&nbsp;新建条目</button>
+    </div>
+    <div class="sects"><button class="on">违规项 · 5</button><button onclick="toast('演示原型：违规模型')">违规模型 · 2</button></div>
+    <table class="tbl">
+      <thead><tr><th style="width:190px">条目名称</th><th>触发描述</th><th style="width:76px">状态</th><th style="width:110px">修订于</th><th class="ops" style="width:110px">操作</th></tr></thead>
+      <tbody>
+        <tr><td><span class="entry-name">诱导仓促签约</span><div class="entry-sub">典型话术：「今天不签这个优惠就没了」</div></td><td class="trig">利用信息差施压使客户仓促签约</td><td><span class="stamp on">启用</span></td><td class="num" style="color:var(--ink-3)">10-21 14:22</td><td class="ops"><button class="btn-text" onclick="toast('演示原型：编辑')">编辑</button><button class="btn-text danger" onclick="toast('演示原型：删除')">删除</button></td></tr>
+        <tr><td><span class="entry-name">诱导签约抢单</span><div class="entry-sub">典型话术：「我俩都是给你优惠，你别跟他签了」</div></td><td class="trig">声称同事报价过高、自身可提供更低价格，诋毁同事诱使退单重签</td><td><span class="stamp on">启用</span></td><td class="num" style="color:var(--ink-3)">10-19 09:10</td><td class="ops"><button class="btn-text" onclick="toast('演示原型：编辑')">编辑</button><button class="btn-text danger" onclick="toast('演示原型：删除')">删除</button></td></tr>
+        <tr><td><span class="entry-name">诱导私下交易</span><div class="entry-sub">典型话术：「你把钱单独转给我，不走公司账」</div></td><td class="trig">引导客户款项直接支付给个人或非公司指定账户</td><td><span class="stamp on">启用</span></td><td class="num" style="color:var(--ink-3)">10-15 17:45</td><td class="ops"><button class="btn-text" onclick="toast('演示原型：编辑')">编辑</button><button class="btn-text danger" onclick="toast('演示原型：删除')">删除</button></td></tr>
+        <tr><td><span class="entry-name">承诺零增项</span><div class="entry-sub">非违规：明确约定按实结算并书面确认的不算</div></td><td class="trig">以「零增项」绝对化承诺淡化增项风险</td><td><span class="stamp on">启用</span></td><td class="num" style="color:var(--ink-3)">10-12 11:03</td><td class="ops"><button class="btn-text" onclick="toast('演示原型：编辑')">编辑</button><button class="btn-text danger" onclick="toast('演示原型：删除')">删除</button></td></tr>
+        <tr><td><span class="entry-name">诱导性口头承诺</span><div class="entry-sub">典型话术：「放心，我给您保证肯定给您做到」</div></td><td class="trig">口头承诺赠品、无偿服务并催促放弃书面协议</td><td><span class="stamp off">停用</span></td><td class="num" style="color:var(--ink-3)">10-08 16:31</td><td class="ops"><button class="btn-text" onclick="toast('演示原型：编辑')">编辑</button><button class="btn-text danger" onclick="toast('演示原型：删除')">删除</button></td></tr>
+      </tbody>
+    </table>`;
+}
+
+function applyWS(ws) {
+  current = ws;
+  const W = WORKSPACES[ws];
+  $('#ws-name').textContent = W.name;
+  $('#ws-count').textContent = W.count;
+  $('#acc-role').textContent = W.role;
+  $('#nav').innerHTML = renderNav(ws);
+  $('#main').innerHTML = renderMain(ws);
+  window.scrollTo(0, 0);
+  document.querySelectorAll('.ws-opt').forEach(o => o.setAttribute('aria-checked', String(o.dataset.ws === ws)));
+}
+
+const wsBtn = $('#ws-btn'), wsMenu = $('#ws-menu');
+function openWS() {
+  const r = wsBtn.getBoundingClientRect();
+  wsMenu.style.left = r.left + 'px';
+  wsMenu.style.top = (r.bottom + 6) + 'px';
+  wsMenu.classList.add('show');
+  wsBtn.setAttribute('aria-expanded', 'true');
+}
+function closeWS() { wsMenu.classList.remove('show'); wsBtn.setAttribute('aria-expanded', 'false'); }
+wsBtn.addEventListener('click', (e) => { e.stopPropagation(); wsMenu.classList.contains('show') ? closeWS() : openWS(); });
+wsMenu.addEventListener('click', (e) => e.stopPropagation());
+document.querySelectorAll('.ws-opt').forEach(o => o.addEventListener('click', () => {
+  const target = o.dataset.ws;
+  closeWS();
+  if (target !== current) { applyWS(target); toast(target === 'sales' ? '已切换到销售工作台' : '已切换到管理后台'); }
+}));
+document.addEventListener('click', () => closeWS());
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeWS();
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'S' || e.key === 's')) {
+    e.preventDefault();
+    const t = current === 'sales' ? 'admin' : 'sales';
+    applyWS(t); toast(t === 'sales' ? '已切换到销售工作台' : '已切换到管理后台');
+  }
+});
+$('#acc-btn').addEventListener('click', () => toast('演示原型：个人设置 / 退出登录'));
+
+applyWS('sales');
+</script>
+</body>
+</html>

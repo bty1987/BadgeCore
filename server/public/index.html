@@ -11,59 +11,71 @@
 (async () => {
   const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
   if (!me) { location.href = '/login.html'; return; }
-  const main = mountAppShell('home', me.name);
+  const main = mountAppShell('home', me);
   const hour = new Date().getHours();
   const hello = hour < 6 ? '夜深了' : hour < 12 ? '早安' : hour < 14 ? '午安' : hour < 18 ? '下午好' : '晚上好';
+  const dateStr = `${new Date().getMonth() + 1}月${new Date().getDate()}日 周${'日一二三四五六'[new Date().getDay()]}`;
   main.innerHTML = `
-    <div class="card" style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
-      <div style="font-size:17px;font-weight:600">☀️ ${hello}，${esc(me.name)}</div>
-      <span class="spacer" style="flex:1"></span>
-      <button class="btn primary" onclick="location.href='/communications.html'">发起沟通 ∨</button>
+    <div class="card" style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:17px;font-weight:700">${hello}，${esc(me.name)}</div>
+        <div style="font-size:12.5px;color:var(--text-3);margin-top:2px" id="greet-sub">${dateStr}</div>
+      </div>
+      <button class="btn primary" onclick="location.href='/communications.html'">${icon('mic', 15)}发起沟通</button>
     </div>
-    <div class="card" style="background:linear-gradient(90deg,#eef2ff,#fff);border-color:#e0e7ff;margin-bottom:14px;color:#4f46e5">
-      “准备十个好问题，胜过准备十套话术。”
+    <div class="card" style="display:flex;align-items:center;gap:18px;margin-bottom:14px">
+      <div class="num" id="punch-n" style="font-size:48px;font-weight:700;color:var(--primary);letter-spacing:-.02em;line-height:1">-</div>
+      <div style="flex:1">
+        <div style="font-size:15px;font-weight:600">今日待办</div>
+        <div style="font-size:12.5px;color:var(--text-3);margin-top:2px">来自沟通承诺提取<span id="punch-due"></span></div>
+      </div>
+      <a class="btn" href="/communications.html">处理待办 ${icon('chevdown', 14)}</a>
     </div>
     <div class="stat-row">
-      <div class="stat-card"><div class="k">沟通次数</div><div class="v" id="st-count">-</div><div class="sub" id="st-count-sub"></div></div>
-      <div class="stat-card"><div class="k">沟通时长 (分钟)</div><div class="v" id="st-dur">-</div><div class="sub" id="st-dur-sub"></div></div>
-      <div class="stat-card"><div class="k">客户数</div><div class="v" id="st-cust">-</div><div class="sub">本人名下</div></div>
-      <div class="stat-card"><div class="k">今日待办</div><div class="v" id="st-todo">-</div><div class="sub">来自沟通承诺提取</div></div>
+      <div class="stat-card"><div class="k">本周沟通</div><div class="v num" id="st-count">-</div><div class="sub" id="st-count-sub"></div></div>
+      <div class="stat-card"><div class="k">沟通时长 (分钟)</div><div class="v num" id="st-dur">-</div><div class="sub">本周</div></div>
+      <div class="stat-card"><div class="k">客户数</div><div class="v num" id="st-cust">-</div><div class="sub">本人名下</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-      <div class="card"><div style="font-weight:600;margin-bottom:12px">今日日程 <a href="/plans.html" style="float:right;font-weight:400;font-size:13px">全部日程 ›</a></div><div id="todo-plans">加载中…</div></div>
-      <div class="card"><div style="font-weight:600;margin-bottom:12px">今日待办 <a href="/communications.html" style="float:right;font-weight:400;font-size:13px">全部待办 ›</a></div><div id="todo-list">加载中…</div></div>
+      <div class="card"><div style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:10px">${icon('calendar', 15)}今日日程<a href="/plans.html" style="margin-left:auto;font-weight:400;font-size:12.5px;color:var(--text-3)">全部日程 ›</a></div><div id="todo-plans">加载中…</div></div>
+      <div class="card"><div style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:10px">${icon('list-check', 15)}今日待办<a href="/communications.html" style="margin-left:auto;font-weight:400;font-size:12.5px;color:var(--text-3)">全部待办 ›</a></div><div id="todo-list">加载中…</div></div>
     </div>
-    <div class="card" style="margin-top:14px"><div style="font-weight:600;margin-bottom:12px">情报中心 <span style="font-size:12px;color:var(--text-3)">访前准备 · 风险提醒</span></div><div id="intel">加载中…</div></div>`;
+    <div class="card" style="margin-top:14px"><div style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:10px">${icon('alert', 15)}情报中心<span style="font-size:12px;font-weight:400;color:var(--text-3)">访前准备 · 风险提醒</span></div><div id="intel">加载中…</div></div>
+    <input type="file" id="file" accept=".mp3,.wav,.m4a,.aac,.mp4,.ogg" style="display:none">`;
 
-  // 统计：沟通（sales 仅本人）
+  const rowHTML = (inner, last) => `<div style="display:flex;align-items:center;gap:10px;padding:8.5px 2px;${last ? '' : 'border-bottom:1px solid #F0F2F7;'}font-size:13.5px">${inner}</div>`;
+  const emptyBox = (ic, t) => `<div class="empty" style="padding:24px 0"><div class="empty-badge" style="width:44px;height:44px">${icon(ic, 19)}</div>${t}</div>`;
+
+  // 统计 + 待办（sales 仅本人）
   const comms = await api('/api/communications');
   const week = comms.filter(c => new Date(c.created_at) > new Date(Date.now() - 7 * 86400e3));
   document.getElementById('st-count').textContent = week.length;
-  document.getElementById('st-count-sub').textContent = `本周 · 累计 ${comms.length}`;
+  document.getElementById('st-count-sub').textContent = `累计 ${comms.length} 次`;
   document.getElementById('st-dur').textContent = Math.round(week.reduce((a, c) => a + (c.duration_s || 0), 0) / 60);
-  document.getElementById('st-dur-sub').textContent = '本周 (分钟)';
   let todos = [];
   for (const c of comms.slice(0, 20)) {
     if (!c.report) continue;
     try { const rp = JSON.parse(c.report); (rp.todos || []).forEach(t => todos.push({ ...t, topic: c.topic || ('沟通#' + c.id), at: c.created_at })); } catch {}
   }
-  document.getElementById('st-todo').textContent = todos.length;
+  document.getElementById('punch-n').textContent = todos.length;
+  document.getElementById('st-cust').textContent = '-';
+  api('/api/customers').then(cs => { document.getElementById('st-cust').textContent = (cs || []).length; }).catch(() => {});
   // 日程（沟通计划）
   const plans = await api('/api/plans').catch(() => []);
   const today = new Date().toISOString().slice(0, 10);
   const todayPlans = plans.filter(p => (p.plan_at || '').startsWith(today) && p.status === 'planned');
-  const emptyBox = (t) => `<div class="empty" style="padding:26px 0"><div class="icon">🗓️</div>${t}</div>`;
+  document.getElementById('greet-sub').textContent = `${dateStr} · 今天有 ${todayPlans.length} 场日程、${todos.length} 件待办`;
   document.getElementById('todo-plans').innerHTML = todayPlans.length
-    ? todayPlans.map(p => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6">🕑 <b>${esc((p.plan_at || '').slice(11, 16))}</b> ${esc(p.title)} <span class="tag info">${esc(p.customer_name || '')}</span></div>`).join('')
-    : emptyBox('今日暂无日程');
+    ? todayPlans.map((p, i) => rowHTML(`<span class="num" style="color:var(--text-3);font-size:12.5px;flex:none">${(p.plan_at || '').slice(11, 16)}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</span><span class="tag info">${esc(p.customer_name || '')}</span>`, i === todayPlans.length - 1)).join('')
+    : emptyBox('calendar', '今日暂无日程');
   document.getElementById('todo-list').innerHTML = todos.length
-    ? todos.slice(0, 6).map(t => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6">☑️ ${esc(t.what)} ${t.due ? `<span class="tag warn">${esc(t.due)}</span>` : ''}<div style="font-size:12px;color:var(--text-3)">${esc(t.topic)}</div></div>`).join('')
-    : emptyBox('今日暂无待办');
+    ? todos.slice(0, 6).map((t, i) => rowHTML(`<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.what)}<div style="font-size:12px;color:var(--text-3)">${esc(t.topic)}</div></span>${t.due ? `<span class="tag warn">${esc(t.due)}</span>` : '<span class="tag off">今天</span>'}`, i === Math.min(todos.length, 6) - 1)).join('')
+    : emptyBox('list-check', '今日暂无待办');
   // 情报中心：风险关键词命中的沟通
   const risky = comms.filter(c => c.meta && (JSON.parse(c.meta).alerts || []).length);
   document.getElementById('intel').innerHTML = risky.length
-    ? risky.slice(0, 5).map(c => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6">⚠️ <a href="/communication.html?id=${c.id}">${esc(c.topic || '沟通#' + c.id)}</a> <span class="tag danger">风险提示</span></div>`).join('')
-    : `<div class="empty" style="padding:26px 0"><div class="icon">📡</div>暂无数据</div>`;
+    ? risky.slice(0, 5).map((c, i, a) => rowHTML(`<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="/communication.html?id=${c.id}">${esc(c.topic || '沟通#' + c.id)}</a></span><span class="tag danger">风险提示</span><span class="num" style="color:var(--text-3);font-size:12.5px">${(c.created_at || '').slice(5, 10)}</span>`, i === a.length - 1)).join('')
+    : emptyBox('inbox', '暂无风险提醒');
 })();
 </script>
 </body>

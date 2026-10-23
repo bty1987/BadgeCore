@@ -35,9 +35,7 @@ let D = null;
   const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
   if (!me) { location.href = '/login.html'; return; }
   if (me.role === 'sales') { document.querySelector('.main').innerHTML = '<div class="card">数据看板仅管理者可见。</div>'; return; }
-  document.getElementById('top').innerHTML = adminTopbar('admin');
-  document.getElementById('side').innerHTML = adminSidebar('');
-  loadMe();
+  initShell('dashboard');
   const views = document.getElementById('views');
   for (let i = 0; i < 7; i++) {
     const v = document.createElement('div'); v.id = 'view' + i;
@@ -101,7 +99,7 @@ let D = null;
         <td>${u.task_rate != null ? u.task_rate + '%' : '-'}</td><td>${u.intention ?? '-'}</td><td>${u.violations || 0}</td></tr>`).join('')}</tbody></table>`;
   }
   function rankTable(rows, kind) {
-    if (!rows.length) return '<div class="empty"><div class="icon">📊</div>暂无排行数据</div>';
+    if (!rows.length) return '<div class="empty"><div class="empty-badge">' + icon('chart', 20) + '</div>暂无排行数据</div>';
     const label = kind === 'task' ? '任务达成率' : '平均意向度';
     const val = u => kind === 'task' ? u.task_rate : u.intention;
     return `<table class="tbl"><thead><tr><th>销售</th><th>沟通数</th><th>时长(分)</th><th style="width:220px">${label}</th></tr></thead><tbody>

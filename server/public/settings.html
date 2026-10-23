@@ -185,8 +185,7 @@ async function closeSessions() {
 }
 
 async function init() {
-  document.getElementById('top').innerHTML = adminTopbar('admin');
-  document.getElementById('side').innerHTML = adminSidebar('global');
+  initShell('settings');
   ME = await (await api('/api/me')).json();
   { const w = document.getElementById('who'); if (w) w.textContent = `${ME.name}（${ME.role}）`; }
   const s = await (await api('/api/settings')).json();

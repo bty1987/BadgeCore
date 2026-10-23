@@ -68,8 +68,7 @@ async function unbind(id) {
 }
 init();
   (async () => {
-    document.getElementById('top').innerHTML = adminTopbar('admin');
-    document.getElementById('side').innerHTML = adminSidebar('');
+    initShell('devices');
     try { const me = await (await fetch('/api/me')).json(); const w = document.getElementById('who'); if (w) w.textContent = me.name + '（' + me.role + '）'; } catch {}
   })();
   </script>

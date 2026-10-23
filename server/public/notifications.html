@@ -9,37 +9,30 @@
 <script src="/assets/app.js"></script>
 </head>
 <body>
-<div id="top"></div>
-<div class="sidelayout">
-<div id="side"></div>
-<div class="main" style="padding-top:20px">
-<div class="wrap">
-  <div class="card">
-    <h2>站内消息（定时报告推送投递箱，AI-11）</h2>
-    <table><thead><tr><th>时间</th><th>标题</th><th>内容</th></tr></thead><tbody id="tbody"></tbody></table>
-  </div>
-</div>
 <script>
-const $ = id => document.getElementById(id);
-async function api(url, opts) {
-  const res = await fetch(url, opts);
-  if (res.status === 401) { location.href = '/login.html'; throw 0; }
-  return res;
-}
-async function load() {
-  const me = await (await api('/api/me')).json();
-  { const w = document.getElementById('who'); if (w) w.textContent = `${me.name}（${me.role}） 未读 ${''}`; }
-  const d = await (await api('/api/notifications')).json();
-  { const w = document.getElementById('who'); if (w) w.textContent = `${me.name}（${me.role}） 未读 ${d.unread}`; }
-  $('tbody').innerHTML = d.rows.map(n => `
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  const main = mountAppShell('notifications', me);
+  main.innerHTML = `
+    <div class="page-head">
+      <div><h1>消息</h1><div class="sub">定时报告与会议纪要的推送投递箱 · <span id="unread">-</span> 条未读</div></div>
+      <span style="flex:1"></span>
+      <button class="btn" id="mark-btn" onclick="markAll()">${icon('check', 15)}全部已读</button>
+    </div>
+    <div style="background:var(--card);border-radius:10px;box-shadow:var(--shadow-card);overflow:hidden">
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="width:140px">时间</th><th style="width:220px">标题</th><th>内容</th></tr></thead><tbody id="tbody"></tbody></table></div>
+    </div>`;
+  const d = await api('/api/notifications');
+  document.getElementById('unread').textContent = d.unread;
+  document.getElementById('tbody').innerHTML = d.rows.map(n => `
     <tr style="${n.read ? 'opacity:.55' : ''}">
-      <td>${(n.created_at || '').replace('T', ' ').slice(0, 16)}</td>
-      <td><b>${n.read ? '' : '● '}${esc(n.title)}</b></td>
+      <td class="num" style="color:var(--text-3)">${(n.created_at || '').replace('T', ' ').slice(0, 16)}</td>
+      <td><b>${n.read ? '' : '<span class="tag info" style="margin-right:6px">未读</span>'}${esc(n.title)}</b></td>
       <td style="white-space:pre-wrap">${esc(n.body)}</td>
-    </tr>`).join('') || '<tr><td colspan="3" class="muted">暂无消息。定时任务在「沟通配置→定时报告」里创建。</td></tr>';
-}
-async function markAll() { await api('/api/notifications/read', { method: 'POST' }); load(); }
-load();
+    </tr>`).join('') || '<tr><td colspan="3" style="text-align:center;padding:40px 0;color:var(--text-3)">暂无消息。定时任务在「沟通配置 → 沟通分析」里创建。</td></tr>';
+})();
+async function markAll() { await api('/api/notifications/read', { method: 'POST' }); location.reload(); }
 </script>
 </body>
 </html>

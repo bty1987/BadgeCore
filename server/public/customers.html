@@ -11,7 +11,7 @@
 (async () => {
   const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
   if (!me) { location.href = '/login.html'; return; }
-  const main = mountAppShell('cust', me.name);
+  const main = mountAppShell('cust', me);
   main.innerHTML = `
     <div class="page-head"><h1>客户</h1><span class="spacer"></span>
       <input id="q" placeholder="搜索客户名称…" style="min-width:200px" onkeydown="if(event.key==='Enter')load()">
