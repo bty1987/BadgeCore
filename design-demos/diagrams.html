@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>BadgeCore 图表：能力全景 / 系统架构</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #E8EBF2; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #1F2329; padding: 30px; }
+section { width: 1060px; margin: 0 auto 40px; background: #F0F3FA; border-radius: 18px; padding: 34px 38px 38px; }
+
+/* 标题行 */
+.hd { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+.hd .logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, #3370FF, #5A8BFF); box-shadow: 0 3px 8px rgba(51,112,255,.35); }
+.hd .t { font-size: 21px; font-weight: 700; }
+.hd .s { margin-left: auto; font-size: 12.5px; color: #8F959E; }
+
+/* ---------- 能力全景：分层卡 ---------- */
+.layers { display: flex; flex-direction: column; gap: 11px; }
+.layer { background: #fff; border-radius: 12px; box-shadow: 0 1px 4px rgba(31,35,41,.06); padding: 13px 18px; display: flex; align-items: center; gap: 14px; }
+.layer .ic { width: 38px; height: 38px; border-radius: 11px; background: #F0F4FF; color: #3370FF; display: flex; align-items: center; justify-content: center; flex: none; }
+.layer .ic svg { width: 20px; height: 20px; }
+.layer .nm { width: 148px; flex: none; }
+.layer .nm b { font-size: 17px; font-weight: 700; display: block; line-height: 1.35; }
+.layer .nm span { font-size: 11.5px; color: #8F959E; display: block; margin-top: 1px; }
+.layer .chips { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.layer .chip { background: #F0F3FA; border-radius: 999px; padding: 4px 13px; font-size: 13px; color: #51565F; white-space: nowrap; }
+.layer .chip.hl { background: #E8EFFF; color: #1D4FC4; font-weight: 600; }
+.base { background: #1F2329; border-radius: 12px; padding: 15px 18px; display: flex; align-items: center; gap: 14px; margin-top: 3px; }
+.base .ic { width: 38px; height: 38px; border-radius: 11px; background: rgba(255,255,255,.12); color: #FFB4A8; display: flex; align-items: center; justify-content: center; flex: none; }
+.base .ic svg { width: 20px; height: 20px; }
+.base .nm { width: 148px; flex: none; }
+.base .nm b { font-size: 16px; font-weight: 700; color: #fff; display: block; }
+.base .nm span { font-size: 11.5px; color: rgba(255,255,255,.55); display: block; }
+.base .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.base .chip { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.18); border-radius: 999px; padding: 4px 13px; font-size: 13px; color: rgba(255,255,255,.92); white-space: nowrap; }
+.foot { margin-top: 16px; text-align: center; font-size: 12.5px; color: #8F959E; }
+
+/* ---------- 系统架构：三段主流程 + 云侧 ---------- */
+.flow { display: flex; align-items: stretch; }
+.node { background: #fff; border-radius: 14px; box-shadow: 0 1px 4px rgba(31,35,41,.06); width: 306px; overflow: hidden; display: flex; flex-direction: column; }
+.node .nh { padding: 13px 16px 11px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #F0F2F7; }
+.node .nh .ic { width: 34px; height: 34px; border-radius: 10px; color: #fff; display: flex; align-items: center; justify-content: center; flex: none; }
+.node .nh .ic svg { width: 18px; height: 18px; }
+.node .nh b { font-size: 16.5px; font-weight: 700; display: block; line-height: 1.3; }
+.node .nh span { font-size: 11.5px; color: #8F959E; display: block; margin-top: 1px; }
+.node ul { list-style: none; padding: 10px 16px 13px; }
+.node li { display: flex; gap: 8px; font-size: 13px; color: #51565F; padding: 4.5px 0; line-height: 1.5; align-items: baseline; }
+.node li i { width: 5px; height: 5px; border-radius: 50%; background: #3370FF; opacity: .55; flex: none; transform: translateY(-2px); }
+.arrow { width: 121px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 8px; }
+.arrow .a-lb { font-size: 11.5px; font-weight: 600; color: #1D4FC4; text-align: center; line-height: 1.4; margin-bottom: 3px; }
+.arrow .a-sub { font-size: 10.5px; color: #8F959E; text-align: center; line-height: 1.45; margin-bottom: 6px; }
+.arrow svg { width: 100%; height: 26px; display: block; }
+
+/* 云侧行 */
+.below { display: flex; margin-top: 0; }
+.below .col { width: 306px; flex: none; }
+.below .gap { width: 121px; flex: none; }
+.vline { display: flex; flex-direction: column; align-items: center; padding: 2px 0; }
+.vline .lbl { font-size: 11px; color: #8F959E; background: #F0F3FA; padding: 1px 8px; margin: 3px 0; white-space: nowrap; }
+.vline .dash { width: 0; border-left: 2px dashed #A9BEE8; height: 16px; }
+.cloud { background: #fff; border-radius: 12px; box-shadow: 0 1px 4px rgba(31,35,41,.06); padding: 11px 14px; display: flex; align-items: center; gap: 10px; }
+.cloud + .cloud { margin-top: 10px; }
+.cloud .ic { width: 30px; height: 30px; border-radius: 9px; background: #F0F4FF; color: #3370FF; display: flex; align-items: center; justify-content: center; flex: none; }
+.cloud .ic svg { width: 16px; height: 16px; }
+.cloud b { font-size: 13.5px; font-weight: 700; display: block; line-height: 1.35; }
+.cloud span { font-size: 11.5px; color: #8F959E; display: block; line-height: 1.4; }
+.cloud.dashy { background: transparent; box-shadow: none; border: 1.5px dashed #A9BEE8; }
+.cloud.dashy .ic { background: #F0F3FA; color: #8F959E; }
+.cloud.dashy b, .cloud.dashy span { color: #646B76; }
+.h-dash { display: flex; align-items: center; margin: 0; }
+.foot2 { margin-top: 18px; text-align: center; font-size: 12.5px; color: #8F959E; }
+.foot2 b { color: #51565F; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ================= 能力全景 ================= -->
+<section id="cap">
+  <div class="hd"><span class="logo"></span><span class="t">BadgeCore 能力全景</span><span class="s">全员数字工牌 · 软硬一体 · 内网自托管</span></div>
+  <div class="layers">
+
+    <div class="layer">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16"/><path d="M16 8h3a1 1 0 0 1 1 1v12M8 7h2M8 11h2M8 15h2M12 21v-4"/></svg></span>
+      <span class="nm"><b>管理后台</b><span>管理者 / 管理员</span></span>
+      <span class="chips"><span class="chip hl">九大配置域</span><span class="chip">数据看板</span><span class="chip">组织权限</span><span class="chip">考勤</span><span class="chip">设备接入</span></span>
+    </div>
+
+    <div class="layer">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><circle cx="9" cy="14" r="1.1"/><circle cx="15" cy="14" r="1.1"/><path d="M12 8V4M9 4h6"/></svg></span>
+      <span class="nm"><b>AI 分析</b><span>每条沟通自动生成</span></span>
+      <span class="chips"><span class="chip hl">立场 + 原文引用</span><span class="chip hl">意向度评分</span><span class="chip">违规判活</span><span class="chip">待办提取</span></span>
+    </div>
+
+    <div class="layer">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span>
+      <span class="nm"><b>内部场景</b><span>自己是自己的客户</span></span>
+      <span class="chips"><span class="chip">会议</span><span class="chip">培训 / 讲座</span><span class="chip">管理谈话</span><span class="chip hl">改标重析</span><span class="chip">纪要投企微</span></span>
+    </div>
+
+    <div class="layer">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L22 20H2z"/><path d="M12 9v5M12 17.5v.01"/></svg></span>
+      <span class="nm"><b>实时辅助</b><span>说话即提醒</span></span>
+      <span class="chips"><span class="chip">竞品 / 风险词告警</span><span class="chip">receiver 实时关键词</span><span class="chip">沉默预警</span></span>
+    </div>
+
+    <div class="layer">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg></span>
+      <span class="nm"><b>Ask AI · 智能体</b><span>自然语言问数据</span></span>
+      <span class="chips"><span class="chip">权限过滤检索</span><span class="chip">来源引用</span><span class="chip">访前准备</span><span class="chip">定时报告</span></span>
+    </div>
+
+    <div class="layer">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg></span>
+      <span class="nm"><b>语音链路</b><span>录音到文本</span></span>
+      <span class="chips"><span class="chip">录音推流</span><span class="chip">OPUS → Ogg</span><span class="chip hl">实时转写</span><span class="chip hl">说话人分离</span></span>
+    </div>
+
+    <div class="layer">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2.5"/><path d="M8 21h8M12 17v4"/></svg></span>
+      <span class="nm"><b>工牌终端</b><span>ESP32-S3 自编译固件</span></span>
+      <span class="chips"><span class="chip">工牌身份面</span><span class="chip">录音红点计时</span><span class="chip">息屏策略</span><span class="chip hl">OTA 自分发</span><span class="chip">心跳上报</span></span>
+    </div>
+
+    <div class="base">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"/><path d="M9 12l2 2 4-4"/></svg></span>
+      <span class="nm"><b>合规三件套</b><span>一票否决 · 07 册</span></span>
+      <span class="chips"><span class="chip">录音双告知</span><span class="chip">员工数据分域</span><span class="chip">AI 生成标识</span></span>
+    </div>
+
+  </div>
+  <div class="foot">全员模式（身份 · 考勤 · 门禁 · 通知）之上，为销售 / 服务角色叠加沟通分析管线</div>
+</section>
+
+<!-- ================= 系统架构 ================= -->
+<section id="arch" style="width:1240px">
+  <div class="hd"><span class="logo"></span><span class="t">系统架构</span><span class="s">Node 零依赖 · SQLite 单文件库 · 内网部署</span></div>
+
+  <div class="flow">
+    <!-- 工牌终端 -->
+    <div class="node">
+      <div class="nh">
+        <span class="ic" style="background:linear-gradient(135deg,#1F2329,#51565F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M9 6h6M12 18.5v.01"/></svg></span>
+        <span><b>工牌终端</b><span>ESP32-S3 · 自编译小智 Fork v2.5.7</span></span>
+      </div>
+      <ul>
+        <li><i></i>工牌身份面（姓名 / 工号 / 职位）</li>
+        <li><i></i>录音红点 + 计时，息屏策略</li>
+        <li><i></i>OTA 自分发：空闲 5 分钟自愈升级</li>
+        <li><i></i>心跳上报：电量 / 版本 / 在线状态</li>
+        <li><i></i>配网锁定 provision_lock</li>
+      </ul>
+    </div>
+
+    <div class="arrow">
+      <span class="a-lb">xiaozhi 协议<br>WS · OPUS 推流</span>
+      <span class="a-sub">身份 / 心跳上报<br>OTA 固件伺服</span>
+      <svg viewBox="0 0 100 26" preserveAspectRatio="none"><line x1="0" y1="13" x2="88" y2="13" stroke="#3370FF" stroke-width="2.5"/><path d="M86 6l12 7-12 7z" fill="#3370FF"/></svg>
+    </div>
+
+    <!-- receiver -->
+    <div class="node">
+      <div class="nh">
+        <span class="ic" style="background:linear-gradient(135deg,#2B5FD9,#5A8BFF)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1a10 10 0 0 1 0-14.2M8.5 15.5a5 5 0 0 1 0-7M19.1 4.9a10 10 0 0 1 0 14.2"/><circle cx="12" cy="12" r="1.6"/></svg></span>
+        <span><b>receiver 接收端</b><span>Node.js · 端口 8100</span></span>
+      </div>
+      <ul>
+        <li><i></i>收流封装 Ogg（会话累积：软分段 10min / 每日 18:00 / 手动收口）</li>
+        <li><i></i>实时转写（讯飞听写）</li>
+        <li><i></i>实时关键词告警</li>
+        <li><i></i>身份推送 badge-identity.json</li>
+        <li><i></i>说话人分离回填（转写大模型）</li>
+      </ul>
+    </div>
+
+    <div class="arrow">
+      <span class="a-lb">令牌自动入库</span>
+      <span class="a-sub">HTTP · X-Ingest-Token</span>
+      <svg viewBox="0 0 100 26" preserveAspectRatio="none"><line x1="0" y1="13" x2="88" y2="13" stroke="#3370FF" stroke-width="2.5"/><path d="M86 6l12 7-12 7z" fill="#3370FF"/></svg>
+    </div>
+
+    <!-- server -->
+    <div class="node">
+      <div class="nh">
+        <span class="ic" style="background:linear-gradient(135deg,#3370FF,#5A8BFF)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></span>
+        <span><b>server 管理后台</b><span>Node.js 零依赖 · :8200 · node:sqlite</span></span>
+      </div>
+      <ul>
+        <li><i></i>沟通分析管道（DeepSeek 实测 / Mock 离线）</li>
+        <li><i></i>四场景模板 sales / meeting / training / talk + 改标重析</li>
+        <li><i></i>看板 · 组织权限 · 考勤 · 设备台账</li>
+        <li><i></i>合规三件套（脱敏 / 留存清理 / 水印）</li>
+        <li><i></i>Ask AI · 智能体调度（访前准备 / 定时报告）</li>
+        <li><i></i>推送：站内信 + 企微群 webhook</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 云侧 + 模拟器 -->
+  <div class="below">
+    <div class="col">
+      <div class="vline" style="height:22px"></div>
+      <div class="cloud dashy">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg></span>
+        <span><b>sim-device.js 模拟器</b><span>无板联调：模拟设备推音频流</span></span>
+      </div>
+    </div>
+    <div class="gap"></div>
+    <div class="col" style="display:flex;flex-direction:column;align-items:center">
+      <div class="vline"><span class="lbl">实时听写 / 转写分离</span><span class="dash"></span></div>
+      <div class="cloud" style="width:100%">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0 0-9h-.35A7 7 0 1 0 4 14.5"/><path d="M12 12v7M9 16l3 3 3-3"/></svg></span>
+        <span><b>讯飞云 ASR</b><span>实时听写 · 录音转写大模型（说话人分离）</span></span>
+      </div>
+    </div>
+    <div class="gap"></div>
+    <div class="col" style="display:flex;flex-direction:column;align-items:center">
+      <div class="vline"><span class="lbl">LLM 分析 · webhook 推送</span><span class="dash"></span></div>
+      <div class="cloud" style="width:100%">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg></span>
+        <span><b>LLM（OpenAI 兼容）</b><span>DeepSeek 实测 · Mock 离线联调</span></span>
+      </div>
+      <div class="cloud" style="width:100%">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span><b>企业微信群</b><span>机器人 webhook：定时报告 + 会议纪要</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot2">部署：<b>deploy/start.bat</b>（Windows）或 <b>deploy/docker-compose.yml</b>（Linux）· 数据自有：SQLite 单文件库 + 本地 Ogg 原始录音</div>
+</section>
+
+</body>
+</html>
