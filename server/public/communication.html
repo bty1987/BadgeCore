@@ -20,6 +20,38 @@ const id = new URLSearchParams(location.search).get('id');
   const stMap = { recorded: '已录制', transcribed: '已转写', analyzing: '分析中', analyzed: '已分析' };
   const SCENE = { sales: ['销售沟通', 'info'], meeting: ['会议纪要', 'on'], training: ['培训·讲座', 'warn'], talk: ['管理谈话', 'danger'] };
   const curScene = SCENE[c.scene] ? c.scene : 'sales';
+  const ROLE_COLOR = { '销售': 'info', '设计师': 'info', '客户': 'success', '店长': 'warn' };
+  const hasAudio = !!c.audio_path;
+  const fmtSec = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  /** 逐句解析（录音回放对照）：优先 [MM:SS] 时间戳（讯飞分离回填=精确）；
+   *  无时间戳的转写（实时听写）按字符占比估时（语速近似，UI 标注 ~） */
+  function parseSegments(text, durationS) {
+    const cleanTotal = text.replace(/\s/g, '').length || 1;
+    let cursor = 0;
+    return text.split(/\n+/).map(line => line.trim()).filter(Boolean).map(line => {
+      const m = line.match(/^(?:([^：\[]{1,8})\s*[：:]\s*)?\[?(\d+):(\d+)\]?\s*([\s\S]*)$/);
+      let role = '', body = line, t = null, approx = true;
+      if (m) {
+        role = (m[1] || '').trim();
+        if (m[2] !== undefined && m[3] !== undefined && /\[\d+:\d+\]/.test(line)) { // 有显式 [MM:SS]
+          t = Number(m[2]) * 60 + Number(m[3]); body = m[4]; approx = false;
+        } else { body = line; }
+      }
+      if (t === null && durationS > 0) t = Math.min(durationS - 1, Math.round(durationS * cursor / cleanTotal));
+      cursor += line.replace(/\s/g, '').length;
+      return { role, text: body.trim(), t, approx };
+    }).filter(s => s.text);
+  }
+  function renderTranscript(text) {
+    const segs = parseSegments(text, c.duration_s || 0);
+    if (!segs.length) return '<div style="white-space:pre-wrap;line-height:2">' + esc(text) + '</div>';
+    return `<div style="font-size:12.5px;color:var(--text-3);margin-bottom:8px">${hasAudio ? '点击句子跳转播放' : ''}（${segs.some(s => !s.approx) ? '带分离时间戳·逐句精确' : '无时间戳·按语速近似定位'}）</div>` +
+      segs.map((s, i) => `<div class="tr-line" data-i="${i}" data-t="${s.t ?? ''}" style="display:flex;gap:10px;align-items:baseline;padding:7px 10px;margin:0 -10px;border-radius:8px;${hasAudio ? 'cursor:pointer' : ''}">
+      ${s.role ? `<span class="tag ${ROLE_COLOR[s.role] || 'info'}" style="flex:none;height:fit-content;margin-top:1px">${esc(s.role)}</span>` : ''}
+      <div style="flex:1;line-height:1.9">${esc(s.text)}</div>
+      ${s.t != null && hasAudio ? `<span class="num" style="flex:none;color:var(--text-3);font-size:12px">${s.approx ? '~' : ''}${fmtSec(s.t)}</span>` : ''}
+    </div>`).join('');
+  }
   main.innerHTML = `
     <div class="page-head"><a href="/communications.html">‹ 返回沟通列表</a>
       <h1 style="font-size:16px">${esc(c.topic || '沟通 #' + c.id)}</h1>
@@ -34,7 +66,13 @@ const id = new URLSearchParams(location.search).get('id');
       <a class="active" onclick="show(0,this)">字幕全文</a><a onclick="show(1,this)">摘要</a>
       <a onclick="show(2,this)">分析报告</a><a onclick="show(3,this)">${{ sales: '待办', meeting: '行动项', training: '考核题', talk: '双向承诺' }[curScene]}</a>
     </div>
-    <div class="card" id="pane0">${c.transcript ? renderTranscript(c.transcript) : '<div class="empty"><div class="icon">🎙️</div>转写尚未完成</div>'}</div>
+    <div class="card" id="pane0">${hasAudio ? `
+      <div id="audio-bar" style="display:flex;align-items:center;gap:12px;background:var(--primary-light);border-radius:10px;padding:10px 14px;margin-bottom:14px">
+        <span style="color:var(--primary);flex:none">${icon('mic', 17)}</span>
+        <audio id="audio" controls preload="metadata" style="flex:1;height:36px" src="/api/communications/${c.id}/audio"></audio>
+        <span id="audio-note" style="flex:none;font-size:12px;color:var(--text-3)">原声回放</span>
+      </div>` : ''}
+      ${c.transcript ? renderTranscript(c.transcript) : '<div class="empty"><div class="empty-badge">' + icon('mic', 20) + '</div>转写尚未完成</div>'}</div>
     <div id="pane1" style="display:none">
       <div class="card" style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:10px">全文摘要（ANA-01）</div>
         <div style="line-height:2;color:var(--text)">${rp?.summary ? esc(rp.summary) : '<div class="empty"><div class="empty-badge">' + icon('file-text', 20) + '</div>暂无摘要，等待分析完成</div>'}</div></div>
@@ -52,42 +90,72 @@ const id = new URLSearchParams(location.search).get('id');
     setTimeout(() => location.reload(), 2500);
   };
 
-  const ROLE_COLOR = { '销售': 'info', '设计师': 'info', '客户': 'success', '店长': 'warn' };
-  function renderTranscript(text) {
-    const parts = text.split(/(?=(?:销售|客户|设计师|店长|经理|说话人\d+)\s*[：:])/).filter(Boolean);
-    if (parts.length <= 1) return '<div style="white-space:pre-wrap;line-height:2">' + esc(text) + '</div>';
-    return parts.map(seg => {
-      const m = seg.match(/^([^：:]{1,6})\s*[：:]([\s\S]*)$/);
-      if (!m) return '<div style="padding:8px 0">' + esc(seg) + '</div>';
-      const role = m[1], color = ROLE_COLOR[role] || 'info';
-      return '<div style="display:flex;gap:10px;padding:7px 0"><span class="tag ' + color + '" style="flex:none;height:fit-content;margin-top:1px">' + esc(role) + '</span><div style="line-height:1.9">' + esc(m[2]) + '</div></div>';
-    }).join('');
-  }
   window.show = (i, el) => {
     document.querySelectorAll('.tabbar a').forEach(a => a.classList.remove('active'));
     el.classList.add('active');
     [0, 1, 2, 3].forEach(k => document.getElementById('pane' + k).style.display = k === i ? '' : 'none');
   };
+  // 待办勾选（M4）：切换后整页刷新保持各面板一致
+  main.addEventListener('change', async (e) => {
+    if (!e.target.classList.contains('td-ck')) return;
+    e.target.disabled = true;
+    try { await api('/api/todos/' + e.target.dataset.id + '/toggle', { method: 'POST' }); setTimeout(() => location.reload(), 300); }
+    catch { e.target.disabled = false; }
+  });
+
+  // 录音回放对照（REC-05）：点句跳播 + 播放中当前句高亮
+  const audio = document.getElementById('audio');
+  if (audio) {
+    audio.addEventListener('error', () => { // 文件缺失/被清理：隐藏音频条，句子退化为只读
+      const bar = document.getElementById('audio-bar'); if (bar) bar.style.display = 'none';
+      document.querySelectorAll('.tr-line').forEach(el => el.style.cursor = 'default');
+    });
+    main.addEventListener('click', (e) => {
+      const line = e.target.closest('.tr-line');
+      if (!line || line.dataset.t === '' || !audio.src) return;
+      audio.currentTime = Number(line.dataset.t);
+      audio.play().catch(() => {});
+      highlightLine(Number(line.dataset.i));
+    });
+    const highlightLine = (idx) => {
+      document.querySelectorAll('.tr-line').forEach(el => {
+        const on = Number(el.dataset.i) === idx;
+        el.style.background = on ? 'rgba(51,112,255,.10)' : '';
+        el.style.boxShadow = on ? 'inset 0 0 0 1px var(--primary-border)' : '';
+      });
+    };
+    audio.addEventListener('timeupdate', () => {
+      const lines = [...document.querySelectorAll('.tr-line')].filter(el => el.dataset.t !== '');
+      let cur = -1;
+      for (const el of lines) { if (Number(el.dataset.t) <= audio.currentTime + 0.01) cur = Number(el.dataset.i); else break; }
+      if (cur >= 0 && !document.querySelector(`.tr-line[data-i="${cur}"]`)?.style.background) highlightLine(cur);
+    });
+  }
   window.reanalyze = async function () {
     toast('分析任务已提交…');
     await api(`/api/communications/${id}/analyze`, { method: 'POST' }).catch(() => {});
     setTimeout(() => location.reload(), 2000);
   };
   function renderActionPane(rp, scene) {
-    if (scene === 'meeting') {
-      if (!rp?.action_items?.length) return '<div class="empty"><div class="empty-badge">' + icon('list-check', 20) + '</div>暂无行动项（会上承诺自动提取）</div>';
-      return rp.action_items.map(t => `<div style="padding:9px 0;border-bottom:1px solid #F0F2F7"><span style="color:var(--primary);margin-right:6px">${icon('check', 14)}</span>${esc(t.what)} ${t.owner ? `<span class="tag info">${esc(t.owner)}</span>` : ''} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
-    }
     if (scene === 'training') {
       if (!rp?.quiz?.length) return '<div class="empty"><div class="empty-badge">' + icon('file-text', 20) + '</div>暂无考核题（培训效果检验）</div>';
-      return rp.quiz.map((q, i) => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6"><b>${i + 1}. ${esc(q.question)}</b><div style="color:var(--text-2);margin-top:4px">参考答案：${esc(q.answer || '')}</div></div>`).join('');
+      return rp.quiz.map((q, i) => `<div style="padding:9px 0;border-bottom:1px solid #F0F2F7"><b>${i + 1}. ${esc(q.question)}</b><div style="color:var(--text-2);margin-top:4px">参考答案：${esc(q.answer || '')}</div></div>`).join('');
     }
     if (scene === 'talk') {
       if (!rp?.commitments?.length) return '<div class="empty"><div class="empty-badge">' + icon('users', 20) + '</div>未提取到双向承诺（事实层记录，不做评价）</div>';
-      return rp.commitments.map(t => `<div style="padding:9px 0;border-bottom:1px solid #f3f4f6"><span class="tag ${t.by === '管理者' ? 'warn' : 'info'}">${esc(t.by || '?')}承诺</span> ${esc(t.what)} ${t.due ? `<span class="tag warn">时限 ${esc(t.due)}</span>` : ''}</div>`).join('');
+      return rp.commitments.map(t => `<div style="padding:9px 0;border-bottom:1px solid #F0F2F7"><span class="tag ${t.by === '管理者' ? 'warn' : 'info'}">${esc(t.by || '?')}承诺</span> ${esc(t.what)} ${t.due ? `<span class="tag warn">时限 ${esc(t.due)}</span>` : ''}</div>`).join('');
     }
-    if (!rp?.todos?.length) return '<div class="empty"><div class="empty-badge">' + icon('list-check', 20) + '</div>暂无待办（从承诺事项自动提取）</div>';
-    return rp.todos.map(t => `<div style="padding:9px 0;border-bottom:1px solid #F0F2F7"><span style="color:var(--primary);margin-right:6px">${icon('check', 14)}</span>${esc(t.what)} ${t.due ? `<span class="tag warn">截止 ${esc(t.due)}</span>` : ''}</div>`).join('');
+    // 待办/行动项（M4 流转）：读 todos 表（c.todos），勾选切换完成态
+    const todos = (c.todos || []).filter(t => scene === 'meeting' ? t.kind === 'action' : t.kind === 'todo');
+    const today = new Date().toISOString().slice(0, 10);
+    if (!todos.length) return `<div class="empty"><div class="empty-badge">${icon('list-check', 20)}</div>暂无${scene === 'meeting' ? '行动项（会上承诺自动提取）' : '待办（从承诺事项自动提取）'}</div>`;
+    return todos.map(t => `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #F0F2F7">
+      <input type="checkbox" class="td-ck" data-id="${t.id}" ${t.status === 'done' ? 'checked' : ''} style="width:15px;height:15px;accent-color:#3370FF;cursor:pointer;flex:none" aria-label="完成">
+      <span style="flex:1;min-width:0;${t.status === 'done' ? 'text-decoration:line-through;color:var(--text-3)' : ''}">${esc(t.what)}</span>
+      ${t.owner && t.owner !== c.owner ? `<span class="tag info">${esc(t.owner)}</span>` : ''}
+      ${t.due ? `<span class="tag ${t.status === 'open' && t.due < today ? 'danger' : 'warn'}">${t.status === 'open' && t.due < today ? '已到期 ' : '截止 '}${esc(t.due)}</span>` : ''}
+      ${t.status === 'done' ? '<span class="tag on">已完成</span>' : ''}
+    </div>`).join('');
   }
   function renderReport(rp, scene) {
     if (!rp) return '<div class="empty"><div class="empty-badge">' + icon('bot', 20) + '</div>暂无分析结果。点击右上角「重新分析」生成。</div>';

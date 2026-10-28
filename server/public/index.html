@@ -46,31 +46,51 @@
   const rowHTML = (inner, last) => `<div style="display:flex;align-items:center;gap:10px;padding:8.5px 2px;${last ? '' : 'border-bottom:1px solid #F0F2F7;'}font-size:13.5px">${inner}</div>`;
   const emptyBox = (ic, t) => `<div class="empty" style="padding:24px 0"><div class="empty-badge" style="width:44px;height:44px">${icon(ic, 19)}</div>${t}</div>`;
 
-  // 统计 + 待办（sales 仅本人）
+  // 统计（sales 仅本人）
   const comms = await api('/api/communications');
   const week = comms.filter(c => new Date(c.created_at) > new Date(Date.now() - 7 * 86400e3));
   document.getElementById('st-count').textContent = week.length;
   document.getElementById('st-count-sub').textContent = `累计 ${comms.length} 次`;
   document.getElementById('st-dur').textContent = Math.round(week.reduce((a, c) => a + (c.duration_s || 0), 0) / 60);
-  let todos = [];
-  for (const c of comms.slice(0, 20)) {
-    if (!c.report) continue;
-    try { const rp = JSON.parse(c.report); (rp.todos || []).forEach(t => todos.push({ ...t, topic: c.topic || ('沟通#' + c.id), at: c.created_at })); } catch {}
-  }
-  document.getElementById('punch-n').textContent = todos.length;
   document.getElementById('st-cust').textContent = '-';
   api('/api/customers').then(cs => { document.getElementById('st-cust').textContent = (cs || []).length; }).catch(() => {});
   // 日程（沟通计划）
   const plans = await api('/api/plans').catch(() => []);
   const today = new Date().toISOString().slice(0, 10);
   const todayPlans = plans.filter(p => (p.plan_at || '').startsWith(today) && p.status === 'planned');
-  document.getElementById('greet-sub').textContent = `${dateStr} · 今天有 ${todayPlans.length} 场日程、${todos.length} 件待办`;
+
+  // 待办/行动项（M4 流转）：/api/todos 单一事实源，勾选即切换状态
+  window.loadTodos = async function () {
+    const [open, all] = await Promise.all([api('/api/todos?status=open'), api('/api/todos?status=all')]);
+    const doneToday = all.filter(t => t.status === 'done' && String(t.done_at || '').slice(0, 10) === today).length;
+    const overdue = open.filter(t => t.due && t.due < today).length;
+    document.getElementById('punch-n').textContent = open.length;
+    document.getElementById('punch-due').textContent = overdue ? `，${overdue} 条已到期` : '';
+    document.getElementById('greet-sub').textContent = `${dateStr} · 今天有 ${todayPlans.length} 场日程、${open.length} 件待办`;
+    const todoRow = (t, last) => `<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;${last ? '' : 'border-bottom:1px solid #F0F2F7;'}font-size:13.5px">
+      <input type="checkbox" class="td-ck" data-id="${t.id}" style="width:16px;height:16px;accent-color:#3370FF;cursor:pointer;flex:none" aria-label="完成待办">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.what)}<div style="font-size:12px;color:var(--text-3)">${esc(t.topic || '沟通#' + t.comm_id)}${t.kind === 'action' ? ' · 行动项' : ''}${t.owner && t.owner !== me.name ? ' · ' + esc(t.owner) : ''}</div></span>
+      ${t.due ? `<span class="tag ${t.due < today ? 'danger' : 'warn'}">${t.due < today ? '已到期' : ''} ${esc(t.due)}</span>` : ''}
+    </div>`;
+    document.getElementById('todo-list').innerHTML = open.length
+      ? open.slice(0, 8).map((t, i) => todoRow(t, i === Math.min(open.length, 8) - 1)).join('') +
+        (doneToday ? `<div style="padding:8px 2px 0;font-size:12.5px;color:var(--text-3)">今日已完成 ${doneToday} 件</div>` : '')
+      : emptyBox('list-check', doneToday ? `今日待办已清空（完成 ${doneToday} 件）` : '今日暂无待办');
+  };
+  document.getElementById('todo-list').addEventListener('change', async (e) => {
+    if (!e.target.classList.contains('td-ck')) return;
+    e.target.disabled = true;
+    try {
+      await api('/api/todos/' + e.target.dataset.id + '/toggle', { method: 'POST' });
+      await loadTodos();
+      if (typeof fillSideTodo === 'function') fillSideTodo(); // 侧栏摘要同步刷新
+    } catch { e.target.disabled = false; }
+  });
+  document.getElementById('greet-sub').textContent = `${dateStr} · 今天有 ${todayPlans.length} 场日程`;
   document.getElementById('todo-plans').innerHTML = todayPlans.length
     ? todayPlans.map((p, i) => rowHTML(`<span class="num" style="color:var(--text-3);font-size:12.5px;flex:none">${(p.plan_at || '').slice(11, 16)}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</span><span class="tag info">${esc(p.customer_name || '')}</span>`, i === todayPlans.length - 1)).join('')
     : emptyBox('calendar', '今日暂无日程');
-  document.getElementById('todo-list').innerHTML = todos.length
-    ? todos.slice(0, 6).map((t, i) => rowHTML(`<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.what)}<div style="font-size:12px;color:var(--text-3)">${esc(t.topic)}</div></span>${t.due ? `<span class="tag warn">${esc(t.due)}</span>` : '<span class="tag off">今天</span>'}`, i === Math.min(todos.length, 6) - 1)).join('')
-    : emptyBox('list-check', '今日暂无待办');
+  loadTodos();
   // 情报中心：风险关键词命中的沟通
   const risky = comms.filter(c => c.meta && (JSON.parse(c.meta).alerts || []).length);
   document.getElementById('intel').innerHTML = risky.length

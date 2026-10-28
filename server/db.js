@@ -112,6 +112,20 @@ CREATE TABLE IF NOT EXISTS notifications(        -- 站内信（AI-11 定时报�
   created_at TEXT NOT NULL,
   read INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS todos(                -- 待办/行动项（ANA-10 提取 + M4 状态流转）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  comm_id INTEGER NOT NULL,
+  todo_key TEXT NOT NULL,                        -- comm 内稳定键（what 归一化 hash），改标重析后状态延续
+  kind TEXT NOT NULL DEFAULT 'todo',             -- todo（销售/培训承诺提取）| action（会议行动项）
+  what TEXT NOT NULL,
+  owner TEXT DEFAULT '',                         -- 负责人（行动项显式指定，其余=沟通归属人）
+  due TEXT,                                      -- 截止（YYYY-MM-DD 或空；模糊日期不参与到期提醒）
+  status TEXT NOT NULL DEFAULT 'open',           -- open | done
+  created_at TEXT NOT NULL,
+  done_at TEXT,
+  notified_on TEXT                               -- 到期提醒去重（当日已提醒）
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_key ON todos(comm_id, todo_key);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT,

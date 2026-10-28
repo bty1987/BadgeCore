@@ -14,7 +14,7 @@ _身份 · 考勤 · 门禁 · 通知 · 录音 · 实时转写 · AI 报告_
 ![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.5%20Zero%20Dep-339933)
 ![ASR](https://img.shields.io/badge/ASR-Xunfei%20Dual%20Pipe-1C6BBA)
 ![LLM](https://img.shields.io/badge/LLM-DeepSeek%20%2F%20Mock-4B8BBE)
-![Tests](https://img.shields.io/badge/Smoke%20Tests-134%2F134-brightgreen)
+![Tests](https://img.shields.io/badge/Smoke%20Tests-140%2F140-brightgreen)
 
 </div>
 
@@ -61,8 +61,8 @@ BadgeCore 是一套**跑在自己内网**的员工数字工牌系统：对全员
 |---|---|---|
 | 🟪 工牌终端（固件） | 自编译小智 v2.5.7 OTA 上机：工牌身份面（层级排版/录音红点计时/电量%）、息屏（OK 长按/任意键唤醒/空闲自动）、OTA 自分发 5 分钟自愈、心跳上报三层链路落库 | ✅ 试驾全链路 |
 | 🔒 配网锁定 | `provision_lock` 三态经身份通道下发 + 配网热点 WPA2，防恶意改址 | ✅ 已实现待上机 |
-| 🎙️ 语音链路 | xiaozhi 协议推流、OPUS→Ogg、讯飞实时听写（实测零字错）、录音转写大模型说话人分离（6 倍速）、会话累积模式（软分段 10min/每日 18:00/手动收口） | ✅ 实测通过 |
-| 🤖 AI 分析 | 报告自动生成：立场带原文引用/意向度评分/违规判活/待办提取；DeepSeek 实测，Mock 可离线联调 | ✅ 上线 |
+| 🎙️ 语音链路 | xiaozhi 协议推流、OPUS→Ogg、讯飞实时听写（实测零字错）、录音转写大模型说话人分离（6 倍速）、原声逐句回放对照（时间戳精确/语速近似）、会话累积模式（软分段 10min/每日 18:00/手动收口） | ✅ 实测通过 |
+| 🤖 AI 分析 | 报告自动生成：立场带原文引用/意向度评分/违规判活/待办提取与流转（勾选完成/到期提醒，M4）；DeepSeek 实测，Mock 可离线联调 | ✅ 上线 |
 | 🏢 内部组织场景 | 会议/培训/谈话四场景模板 + 改标重析；talk 红线=事实层双向承诺、无情绪评分、参与者对称透明 | ✅ M1+M3 |
 | 🚨 实时辅助 | 竞品/风险词入库告警 + receiver 实时关键词（AI-09 一期） | ✅ 规则层 |
 | 🔎 Ask AI | 关键词检索 + 权限过滤 + 来源引用（AI-08，升级路径=向量库） | ✅ 简版 RAG |
@@ -73,7 +73,7 @@ BadgeCore 是一套**跑在自己内网**的员工数字工牌系统：对全员
 | 📨 企微推送 | 定时报告 + 会议纪要双投企微群（webhook，开关默认关；talk 不推群） | ✅ W1-S1 |
 | 📟 量产硬件 | 方案商 Turnkey 询价，开发板验证全链路后启动（D11） | ⏳ 暂缓 |
 
-> 冒烟测试 134/134（`server/smoke-test.js`，自包含临时库）。
+> 冒烟测试 140/140（`server/smoke-test.js`，自包含临时库）。
 
 ## 与市面「销售录音工牌」的区别
 
@@ -102,7 +102,7 @@ BadgeCore 是一套**跑在自己内网**的员工数字工牌系统：对全员
 | ASR | 讯飞实时听写 + 录音转写大模型（说话人分离）；本地 faster-whisper 备选 | 双云管道实测通过 |
 | LLM | OpenAI 兼容接口（DeepSeek 实测）+ Mock 模式 | 报告分析/Ask AI/智能体 |
 | 推送 | 站内信 · 企微群机器人 webhook | 定时报告 + 会议纪要双投 |
-| 质量 | 冒烟测试 134 项（自包含临时库） | `cd server && node smoke-test.js` |
+| 质量 | 冒烟测试 140 项（自包含临时库） | `cd server && node smoke-test.js` |
 
 ## 快速开始（开发/演示）
 

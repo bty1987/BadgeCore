@@ -188,6 +188,55 @@ function checkSilence() {
   return n;
 }
 
+/** 截止日期归一化：仅接受 YYYY-MM-DD；模糊日期（「明天」「下周五」）保留原文展示但不参与到期提醒 */
+function normalizeDue(due) {
+  if (!due) return null;
+  const s = String(due).trim();
+  const mch = s.match(/(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})/);
+  if (!mch) return s;
+  return `${mch[1]}-${String(mch[2]).padStart(2, '0')}-${String(mch[3]).padStart(2, '0')}`;
+}
+
+/** 待办/行动项同步（ANA-10 提取 + M4 流转）：报告落库后提取入 todos 表；
+ *  按 (comm_id, todo_key=what 归一化 hash) 幂等 upsert——改标重析后同文本待办的人工状态（done）延续，
+ *  重析中被 AI 丢弃的条目保留不删（承诺不能因重析静默消失）。
+ *  talk 场景不入（09 册红线 K5：双向承诺为事实层记录，不做流转评价） */
+function syncTodos(commId, report) {
+  if (!report) return 0;
+  const row = db.prepare('SELECT scene, owner FROM communications WHERE id=?').get(commId);
+  if (!row || row.scene === 'talk') return 0;
+  const items = [
+    ...(report.todos || []).map(t => ({ kind: 'todo', what: String(t.what || ''), due: t.due || null, owner: '' })),
+    ...(report.action_items || []).map(t => ({ kind: 'action', what: String(t.what || ''), due: t.due || null, owner: String(t.owner || '') })),
+  ].filter(t => t.what.trim());
+  const now = new Date().toISOString();
+  const upsert = db.prepare(`INSERT INTO todos(comm_id, todo_key, kind, what, owner, due, created_at) VALUES(?,?,?,?,?,?,?)
+    ON CONFLICT(comm_id, todo_key) DO UPDATE SET kind=excluded.kind, owner=excluded.owner, due=excluded.due`);
+  for (const t of items) {
+    const key = crypto.createHash('sha1').update(t.what.replace(/\s+/g, '')).digest('hex').slice(0, 16);
+    upsert.run(commId, key, t.kind, t.what, t.owner || row.owner || '', normalizeDue(t.due), now);
+  }
+  return items.length;
+}
+
+/** 待办到期提醒（M4）：open 且 due（YYYY-MM-DD）早于今天 → 站内信通知负责人，每条每日一次 */
+function checkOverdueTodos() {
+  const today = new Date().toISOString().slice(0, 10);
+  let n = 0;
+  const rows = db.prepare(`SELECT t.id, t.comm_id, t.what, t.due, t.owner, c.owner AS comm_owner
+    FROM todos t JOIN communications c ON c.id = t.comm_id
+    WHERE t.status='open' AND length(t.due)=10 AND t.due < ? AND (t.notified_on IS NULL OR t.notified_on != ?)`).all(today, today);
+  for (const t of rows) {
+    const user = t.owner || t.comm_owner;
+    if (!user) continue;
+    db.prepare('INSERT INTO notifications(user, title, body, created_at) VALUES(?,?,?,?)')
+      .run(user, '待办已到期', `「${t.what}」（${t.due} 到期，出自沟通 #${t.comm_id}）仍未完成，请跟进。`, new Date().toISOString());
+    db.prepare('UPDATE todos SET notified_on=? WHERE id=?').run(today, t.id);
+    n++;
+  }
+  return n;
+}
+
 /** Ask AI 检索（AI-08 简版 RAG，内部使用：滑窗关键词匹配，不依赖向量库） */
 function extractTerms(q) {
   const stop = new Set(['什么', '怎么', '哪些', '请问', '一下', '关于', '最近', '情况', '我们', '他们', '这个', '那个', '如何', '为什么', '多少']);
@@ -311,6 +360,7 @@ async function runAnalysis(commId, actor) {
     const report = await analyzeCommunication(llm, row.transcript || '', loadAnalysisConfig(), row.scene);
     db.prepare('UPDATE communications SET report=?, status=? WHERE id=?')
       .run(JSON.stringify(report), 'analyzed', commId);
+    try { syncTodos(commId, report); } catch (e) { console.error('[待办同步]', e.message); } // M4：提取入 todos 表（失败不阻断分析）
     audit(db, actor, 'analyze', `comm#${commId}`, `scene=${row.scene} model=${report.meta.model}`);
     if (row.scene === 'meeting') await pushMeetingMinutes(commId, row, report); // 10 册 W1 hook②：纪要摘要卡（开关内）
     return report;
@@ -501,6 +551,59 @@ async function handleApi(req, res, url) {
     }).filter(r => canSeeComm(me, r)); // talk 记录叠加收紧（INT-40），范围外直接不显示
     return sendJson(res, 200, rows);
   }
+  // 待办/行动项（M4 状态流转）：列表（sales 仅本人范围）+ 完成切换
+  if (pathname === '/api/todos' && method === 'GET') {
+    const { status = 'open', kind = '', comm_id = '' } = Object.fromEntries(url.searchParams);
+    let sql = `SELECT t.id, t.comm_id, t.kind, t.what, t.owner, t.due, t.status, t.done_at, c.topic, c.owner AS comm_owner
+               FROM todos t JOIN communications c ON c.id = t.comm_id`;
+    const where = ["c.scene != 'talk'"]; const params = [];
+    const owners = visibleOwners(me);
+    if (owners) {
+      const ph = owners.map(() => '?').join(',');
+      where.push(`(c.owner IN (${ph}) OR t.owner IN (${ph}))`); params.push(...owners, ...owners);
+    }
+    if (status !== 'all') { where.push('t.status=?'); params.push(status); }
+    if (kind) { where.push('t.kind=?'); params.push(kind); }
+    if (comm_id) { where.push('t.comm_id=?'); params.push(Number(comm_id)); }
+    sql += ' WHERE ' + where.join(' AND ') + ' ORDER BY t.id DESC LIMIT 500';
+    return sendJson(res, 200, db.prepare(sql).all(...params));
+  }
+  if ((m = pathname.match(/^\/api\/todos\/(\d+)\/toggle$/)) && method === 'POST') {
+    const t = db.prepare('SELECT t.id, t.owner, c.owner AS comm_owner FROM todos t JOIN communications c ON c.id=t.comm_id WHERE t.id=?').get(Number(m[1]));
+    if (!t) throw new HttpError(404, '待办不存在');
+    if (me.role === 'sales' && me.name !== t.comm_owner && me.name !== t.owner) throw new HttpError(403, '仅本人沟通的待办');
+    const done = !(db.prepare('SELECT status FROM todos WHERE id=?').get(t.id).status === 'done');
+    db.prepare('UPDATE todos SET status=?, done_at=? WHERE id=?')
+      .run(done ? 'done' : 'open', done ? new Date().toISOString() : null, t.id);
+    audit(db, me.name, 'todo_toggle', `todo#${t.id}`, done ? 'done' : 'reopen');
+    return sendJson(res, 200, { id: t.id, status: done ? 'done' : 'open' });
+  }
+  // 录音回放（REC-05 原声可溯）：流式伺服 Ogg，支持 HTTP Range（浏览器拖动/逐句定位必需）
+  if ((m = pathname.match(/^\/api\/communications\/(\d+)\/audio$/)) && method === 'GET') {
+    const row = db.prepare('SELECT id, audio_path, scene, owner, participants FROM communications WHERE id=?').get(Number(m[1]));
+    if (!row) throw new HttpError(404, '沟通记录不存在');
+    const owners = visibleOwners(me);
+    if (row.scene === 'talk') {
+      if (!canSeeComm(me, row)) throw new HttpError(403, '无权访问该记录（谈话记录仅参与者可见，INT-40）');
+    } else if (owners && !owners.includes(row.owner)) {
+      throw new HttpError(403, '无权访问该记录（数据范围）');
+    }
+    if (!row.audio_path || !fs.existsSync(row.audio_path)) throw new HttpError(404, '音频文件不存在（或已被留存策略清理）');
+    const total = fs.statSync(row.audio_path).size;
+    const headers = { 'Content-Type': 'audio/ogg', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=3600' };
+    const rm = String(req.headers.range || '').match(/bytes=(\d*)-(\d*)/);
+    if (rm) {
+      const start = rm[1] ? Number(rm[1]) : 0;
+      const end = Math.min(rm[2] ? Number(rm[2]) : total - 1, total - 1);
+      if (start > end || start >= total) { res.writeHead(416, { 'Content-Range': `bytes */${total}` }); return res.end(); }
+      res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 });
+      fs.createReadStream(row.audio_path, { start, end }).on('error', () => res.end()).pipe(res);
+    } else {
+      res.writeHead(200, { ...headers, 'Content-Length': total });
+      fs.createReadStream(row.audio_path).on('error', () => res.end()).pipe(res);
+    }
+    return;
+  }
   if ((m = pathname.match(/^\/api\/communications\/(\d+)$/))) {
     const id = Number(m[1]);
     const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
@@ -515,6 +618,7 @@ async function handleApi(req, res, url) {
     if (method === 'GET') {
       row.report = row.report ? JSON.parse(row.report) : null;
       row.meta = JSON.parse(row.meta || '{}');
+      row.todos = db.prepare('SELECT id, kind, what, owner, due, status, done_at FROM todos WHERE comm_id=? ORDER BY id').all(id); // M4 流转
       const cust = row.customer_id ? db.prepare('SELECT id, name FROM customers WHERE id=?').get(row.customer_id) : null;
       row.customer = cust ? { id: cust.id, name: cust.name } : null;
       return sendJson(res, 200, row);
@@ -1283,6 +1387,15 @@ try { const purged = runRetentionPurge(db); console.log(`[留存] 启动清理�
 setInterval(() => { try { runRetentionPurge(db); } catch { /* 下轮再试 */ } }, 24 * 3600 * 1000).unref();
 setInterval(() => { try { checkSilence(); } catch (e) { console.error('[沉默预警]', e.message); } }, 3600 * 1000).unref(); // 风险预警·沉默型（D16）
 try { checkSilence(); } catch { /* 启动时静默尝试 */ }
+// M4 待办：存量报告回填（幂等，试点规模秒级）+ 每小时到期扫描
+try {
+  let backfilled = 0;
+  for (const r of db.prepare("SELECT id, report FROM communications WHERE status='analyzed' AND report IS NOT NULL").all()) {
+    try { backfilled += syncTodos(r.id, JSON.parse(r.report)); } catch { /* 单条报告损坏不阻断 */ }
+  }
+  if (backfilled) console.log(`[待办] 存量报告回填 ${backfilled} 条`);
+} catch (e) { console.error('[待办] 回填失败:', e.message); }
+setInterval(() => { try { checkOverdueTodos(); } catch (e) { console.error('[待办到期]', e.message); } }, 3600 * 1000).unref();
 startScheduler();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);

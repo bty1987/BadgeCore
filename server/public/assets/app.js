@@ -288,20 +288,16 @@ function wireShell() {
   accMenu.addEventListener('click', (e) => e.stopPropagation());
 }
 
-/** 销售侧栏「今日待办」迷你摘要（异步填充，失败静默） */
+/** 销售侧栏「今日待办」迷你摘要（M4：读 todos 表，失败静默） */
 async function fillSideTodo() {
   try {
-    const comms = await api('/api/communications');
-    const todos = [];
-    for (const c of comms.slice(0, 20)) {
-      if (!c.report) continue;
-      try { const rp = JSON.parse(c.report); (rp.todos || []).forEach(t => todos.push(t)); } catch {}
-    }
+    const todos = await api('/api/todos?status=open');
     const n = document.getElementById('td-n'), rows = document.getElementById('td-rows');
     if (!n || !rows) return;
     n.textContent = todos.length;
+    const today = new Date().toISOString().slice(0, 10);
     rows.innerHTML = todos.length
-      ? todos.slice(0, 3).map((t, i) => `<div class="r" onclick="location.href='/communications.html'"><i class="${i === 0 ? 'hot' : ''}"></i><span>${esc(t.what)}</span></div>`).join('')
+      ? todos.slice(0, 3).map(t => `<div class="r" onclick="location.href='/index.html'" title="${esc(t.what)}"><i class="${t.due && t.due < today ? 'hot' : ''}"></i><span>${esc(t.what)}</span></div>`).join('')
       : '<div class="r empty">今日暂无待办</div>';
   } catch {}
 }

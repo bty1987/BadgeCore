@@ -222,6 +222,35 @@ async function runWecomWebhookSuite() {
     r = await api('POST', `/api/communications/${ingestData.id}/analyze`);
     check('手动重跑分析', r.status === 200 && r.data?.report?.meta?.model === 'mock');
 
+    // 6b. 待办/行动项流转（M4）：同步入表 → 列表 → 勾选 → 重析状态延续
+    r = await api('GET', '/api/todos');
+    const todoRow0 = (r.data || []).find(t => t.comm_id === ingestData.id);
+    check('M4 待办同步入表（分析后自动）', !!todoRow0 && todoRow0.status === 'open' && todoRow0.kind === 'todo');
+    check('M4 详情返回 todos 数组', Array.isArray((await api('GET', `/api/communications/${ingestData.id}`)).data?.todos));
+    r = await api('POST', `/api/todos/${todoRow0.id}/toggle`);
+    check('M4 勾选完成', r.status === 200 && r.data?.status === 'done');
+    r = await api('POST', `/api/communications/${ingestData.id}/analyze`); // 重析：同文本待办状态延续
+    r = await api('GET', '/api/todos?status=all');
+    const todoRow1 = (r.data || []).find(t => t.id === todoRow0.id);
+    check('M4 改标重析后完成态延续', todoRow1?.status === 'done');
+    r = await api('POST', `/api/todos/${todoRow0.id}/toggle`);
+    check('M4 重新打开', r.data?.status === 'open');
+
+    // 6c. 录音回放对照（REC-05）：音频流 + HTTP Range + 诚实 404
+    r = await fetch(BASE + `/api/communications/${ingestData.id}/audio`, { headers: { Cookie: cookie } });
+    check('REC-05 音频文件不存在→404', r.status === 404);
+    const oggTmp = path.join(os.tmpdir(), `badgecore-smoke-audio-${Date.now()}.ogg`);
+    fs.writeFileSync(oggTmp, Buffer.alloc(1024, 7));
+    const ing2 = await (await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 3, audio_path: oggTmp, device: 'sim-device', owner: '张三', topic: '音频流冒烟', transcript: '说话人1: 你好，这是回放冒烟。' }),
+    })).json();
+    r = await fetch(BASE + `/api/communications/${ing2.id}/audio`, { headers: { Cookie: cookie } });
+    check('REC-05 音频流 200（全量）', r.status === 200 && Number(r.headers.get('content-length')) === 1024);
+    r = await fetch(BASE + `/api/communications/${ing2.id}/audio`, { headers: { Cookie: cookie, Range: 'bytes=0-99' } });
+    check('REC-05 Range 请求 206（浏览器拖动必需）', r.status === 206 && r.headers.get('content-range') === 'bytes 0-99/1024');
+    const audioCommId = ing2.id;
+
     // 7. LLM 连通测试端点
     r = await api('POST', '/api/llm-test');
     check('LLM 连通测试（mock）', r.data?.ok === true);
@@ -236,8 +265,12 @@ async function runWecomWebhookSuite() {
     check('数据范围：sales 看不到他人记录（ADM-313）', r.data?.length === 0);
     r = await api('GET', `/api/communications/${ingestData.id}`);
     check('数据范围：sales 访问他人详情 403', r.status === 403);
+    r = await fetch(BASE + `/api/communications/${audioCommId}/audio`, { headers: { Cookie: cookie } });
+    check('数据范围：sales 访问他人音频 403', r.status === 403);
     r = await api('GET', '/api/config/task_models');
     check('配置页权限：sales 403', r.status === 403);
+    r = await api('GET', '/api/todos');
+    check('M4 数据范围：sales 看不到他人待办', r.status === 200 && r.data?.length === 0);
     cookie = savedCookie;
 
     // 9. Ask AI（AI-08 简版 RAG）
