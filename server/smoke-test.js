@@ -263,6 +263,19 @@ async function runWecomWebhookSuite() {
     r = await api('POST', '/api/kb-entry', { comm_id: ingestData.id, domain: 'violations', name: 'x', content: 'y' });
     check('M4 非法 domain 拒绝', r.status === 400);
 
+    // 6e. 沟通计划主动提醒（M4）：过期未完成 → 站内信 + 每日去重
+    r = await api('POST', '/api/plans', { title: '冒烟过期日程', plan_at: new Date(Date.now() - 86400e3).toISOString().slice(0, 16), flow: '' });
+    check('M4 创建过期计划', r.status === 200);
+    r = await api('POST', '/api/plan-check');
+    check('M4 日程提醒触发', r.status === 200 && r.data?.reminded >= 1);
+    r = await api('GET', '/api/notifications');
+    check('M4 过期日程通知到达', (r.data?.rows || []).some(n => n.title === '日程已过期' && n.body.includes('冒烟过期日程')));
+    r = await api('POST', '/api/plan-check');
+    const nCnt1 = (await api('GET', '/api/notifications')).data.rows.length;
+    r = await api('POST', '/api/plan-check');
+    const nCnt2 = (await api('GET', '/api/notifications')).data.rows.length;
+    check('M4 日程提醒当日去重', nCnt2 === nCnt1);
+
     // 7. LLM 连通测试端点
     r = await api('POST', '/api/llm-test');
     check('LLM 连通测试（mock）', r.data?.ok === true);

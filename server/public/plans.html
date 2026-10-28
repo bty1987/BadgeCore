@@ -23,7 +23,14 @@
     { key: 'owner', title: '负责人', w: '90px', render: r => esc(r.owner || '-') },
     { key: 'plan_at', title: '计划时间', w: '140px', render: r => fmtTime(r.plan_at) },
     { key: 'flow', title: '沟通流程', w: '120px', render: r => `<span class="tag info">${esc(r.flow || '通用')}</span>` },
-    { key: 'status', title: '状态', w: '80px', render: r => `<span class="tag ${r.status === 'done' ? 'on' : 'warn'}">${r.status === 'done' ? '已完成' : '待进行'}</span>` },
+    { key: 'status', title: '状态', w: '110px', render: r => {
+        if (r.status === 'done') return '<span class="tag on">已完成</span>';
+        const day = (r.plan_at || '').slice(0, 10);
+        const today = new Date().toISOString().slice(0, 10);
+        if (day && day < today) return '<span class="tag danger">已过期</span>';
+        if (day === today) return '<span class="tag warn">今天</span>';
+        return '<span class="tag off">待进行</span>';
+      } },
   ], rows, r => r.status !== 'done' ? `<a onclick="done(${r.id})">标记完成</a>` : '');
   window.done = async function (id) {
     await api(`/api/plans/${id}/complete`, { method: 'POST' }); toast('已完成'); location.reload();

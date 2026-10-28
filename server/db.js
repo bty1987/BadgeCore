@@ -154,6 +154,8 @@ function openDb(dbFile) {
     ['devices', 'default_scene', "TEXT DEFAULT 'sales'"],
     // 10 册 W1/W2 企微集成：成员企微 userid（扫码登录自动写入，S2 应用消息 touser）
     ['users', 'wecom_userid', 'TEXT'],
+    // 沟通计划主动提醒（M4）：当日已提醒去重
+    ['plans', 'reminded_on', 'TEXT'],
   ]) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch { /* 列已存在 */ }
   }

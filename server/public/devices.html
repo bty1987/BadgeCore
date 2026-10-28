@@ -9,70 +9,116 @@
 <script src="/assets/app.js"></script>
 </head>
 <body>
-<div id="top"></div>
-<div class="sidelayout">
-<div id="side"></div>
-<div class="main" style="padding-top:20px">
-<div class="wrap">
-  <div class="card">
-    <h2>设备台账（04 册设备管理域；设备录音入库时自动注册上线）</h2>
-    <table>
-      <thead><tr><th>设备标识</th><th>型号</th><th>固件</th><th>持有人</th><th>默认场景</th><th>状态</th><th>最近活跃</th><th>操作</th></tr></thead>
-      <tbody id="tbody"></tbody>
-    </table>
-    <div class="muted" style="margin-top:8px">绑定/解绑写操作日志与审计；固件升级走 receiver OTA 通道（量产期再纳入灰度管理，D16）。默认场景（09 册 INT-12）：该设备录音入库自动标注的场景，会议室设备建议设为「会议」。</div>
-  </div>
-  <div class="card">
-    <h2>操作日志（对标 ★ badge operation-log）</h2>
-    <table><thead><tr><th>时间</th><th>设备</th><th>动作</th><th>明细</th></tr></thead><tbody id="logs"></tbody></table>
-  </div>
-</div>
 <script>
-const $ = id => document.getElementById(id);
-async function api(url, opts) {
-  const res = await fetch(url, opts);
-  if (res.status === 401) { location.href = '/login.html'; throw 0; }
-  return res;
-}
-const fmt = iso => iso ? iso.replace('T', ' ').slice(0, 16) : '-';
-const ACT = { session: '录音会话', bind: '绑定', unbind: '解绑', offline: '离线' };
-async function init() {
-  const me = await (await api('/api/me')).json();
-  { const w = document.getElementById('who'); if (w) w.textContent = `${me.name}（${me.role}）`; }
-  const rows = await (await api('/api/devices')).json();
-  $('tbody').innerHTML = rows.map(d => `
-    <tr>
-      <td>${esc(d.device_key)}</td><td>${esc(d.model) || '-'}</td><td>${esc(d.fw_version) || '-'}</td>
-      <td contenteditable id="own-${d.id}">${esc(d.owner)}</td>
-      <td><select id="scene-${d.id}" style="min-width:90px">${[['sales', '销售'], ['meeting', '会议'], ['training', '培训'], ['talk', '谈话']].map(s => `<option value="${s[0]}" ${(d.default_scene || 'sales') === s[0] ? 'selected' : ''}>${s[1]}</option>`).join('')}</select></td>
-      <td><span class="badge ${d.status === 'online' ? 'analyzed' : 'low'}">${d.status === 'online' ? '在线' : '离线'}</span></td>
-      <td>${fmt(d.last_seen_at)}</td>
-      <td>
-        <button onclick="bind(${d.id})">保存绑定</button>
-        <button class="danger" onclick="unbind(${d.id})">解绑</button>
-      </td>
-    </tr>`).join('') || '<tr><td colspan="8" class="muted" style="padding:14px">暂无设备。receiver 入库会话会自动注册设备。</td></tr>';
-  const logs = await (await api('/api/devices/logs')).json();
-  $('logs').innerHTML = logs.map(l => `
-    <tr><td>${fmt(l.ts)}</td><td>${esc(l.device_key)}</td><td>${ACT[l.action] || l.action}</td><td class="evidence">${esc(l.detail)}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">暂无日志。</td></tr>';
-}
-async function bind(id) {
-  await api(`/api/devices/${id}/bind`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ owner: document.getElementById(`own-${id}`).textContent.trim(), default_scene: document.getElementById(`scene-${id}`).value }) });
-  init();
-}
-async function unbind(id) {
-  await api(`/api/devices/${id}/bind`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner: '', default_scene: document.getElementById(`scene-${id}`)?.value || 'sales' }) });
-  init();
-}
-init();
-  (async () => {
-    initShell('devices');
-    try { const me = await (await fetch('/api/me')).json(); const w = document.getElementById('who'); if (w) w.textContent = me.name + '（' + me.role + '）'; } catch {}
-  })();
-  </script>
-  </div></div>
-  </script>
+(async () => {
+  const me = await fetchMe();
+  if (!me) { location.href = '/login.html'; return; }
+  if (me.role === 'sales') { document.body.innerHTML = '<div class="card" style="margin:80px auto;max-width:420px">设备台账仅管理者可见。</div>'; return; }
+  const main = mountAppShell('devices', me);
+  let _rows = [];   // 当前台账（bindDlg/unbind 取行数据）
+  main.innerHTML = `
+    <div class="page-head">
+      <div><h1>设备管理</h1><div class="sub">设备录音入库时自动注册上线 · 绑定/解绑写操作日志与审计 · 固件升级走 receiver OTA 通道</div></div>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="load()">${icon('refresh', 15)}刷新</button>
+    </div>
+    <div class="stat-row" id="stats"></div>
+    <div style="background:var(--card);border-radius:10px;box-shadow:var(--shadow-card);overflow:hidden;margin-bottom:14px">
+      <div style="padding:14px 18px 4px;font-weight:600">设备台账<span style="font-weight:400;font-size:12px;color:var(--text-3);margin-left:8px">默认场景（09 册 INT-12）：该设备录音入库自动标注的场景，会议室设备建议设「会议」</span></div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr>
+        <th>设备</th><th style="width:100px">状态</th><th style="width:130px">电量</th><th style="width:90px">固件</th>
+        <th style="width:100px">持有人</th><th style="width:90px">默认场景</th><th style="width:110px">最近活跃</th><th class="ops" style="width:120px">操作</th>
+      </tr></thead><tbody id="tbody"></tbody></table></div>
+    </div>
+    <div style="background:var(--card);border-radius:10px;box-shadow:var(--shadow-card);overflow:hidden">
+      <div style="padding:14px 18px 4px;font-weight:600">操作日志</div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="width:140px">时间</th><th style="width:200px">设备</th><th style="width:100px">动作</th><th>明细</th></tr></thead><tbody id="logs"></tbody></table></div>
+    </div>`;
+
+  const fmt = iso => iso ? iso.replace('T', ' ').slice(0, 16) : '-';
+  const ago = iso => {
+    if (!iso) return '-';
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 90) return '刚刚';
+    if (s < 3600) return Math.round(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.round(s / 3600) + ' 小时前';
+    return Math.round(s / 86400) + ' 天前';
+  };
+  const SCENES = { sales: '销售', meeting: '会议', training: '培训', talk: '谈话' };
+  const SCENE_TAG = { sales: 'info', meeting: 'on', training: 'warn', talk: 'danger' };
+  const ACT = { session: '录音会话', bind: '绑定', unbind: '解绑', offline: '离线' };
+  const shortKey = k => { const s = String(k || ''); return s.includes(':') ? s.slice(s.indexOf(':') + 1) : s; };
+  const batt = (v) => {
+    const n = parseInt(v, 10);
+    if (isNaN(n)) return '<span style="color:var(--text-3)">-</span>';
+    const color = n < 20 ? 'var(--danger)' : n < 40 ? 'var(--warning)' : 'var(--success)';
+    return `<span style="display:inline-flex;align-items:center;gap:7px;min-width:88px">
+      <span style="flex:1;height:5px;border-radius:3px;background:#EEF0F5;overflow:hidden"><span style="display:block;width:${n}%;height:100%;background:${color}"></span></span>
+      <span class="num" style="font-size:12.5px;color:${n < 20 ? 'var(--danger)' : 'var(--text-2)'}">${n}%</span></span>`;
+  };
+
+  window.load = async function () {
+    _rows = await api('/api/devices').catch(() => []);
+    const rows = _rows;
+    const online = rows.filter(d => d.status === 'online').length;
+    const lowBatt = rows.filter(d => parseInt(d.battery, 10) < 20).length;
+    const fws = [...new Set(rows.map(d => d.fw_version).filter(Boolean))];
+    document.getElementById('stats').innerHTML = `
+      <div class="stat-card"><div class="k">设备总数</div><div class="v num">${rows.length}</div><div class="sub">已注册台账</div></div>
+      <div class="stat-card"><div class="k">在线</div><div class="v num" style="color:var(--success)">${online}</div><div class="sub">离线 ${rows.length - online} 台</div></div>
+      <div class="stat-card"><div class="k">低电量 (&lt;20%)</div><div class="v num" style="color:${lowBatt ? 'var(--danger)' : 'inherit'}">${lowBatt}</div><div class="sub">建议充电</div></div>
+      <div class="stat-card"><div class="k">固件版本</div><div class="v num">${fws.length}</div><div class="sub">${fws.length ? esc(fws.join(' / ')) : '暂无上报'}</div></div>`;
+    document.getElementById('tbody').innerHTML = rows.map(d => `
+      <tr>
+        <td title="${esc(d.device_key)}"><b>${esc(d.model || shortKey(d.device_key))}</b><div style="font-size:12px;color:var(--text-3)">${esc(shortKey(d.device_key))}</div></td>
+        <td>${d.status === 'online'
+          ? '<span style="display:inline-flex;align-items:center;gap:6px;color:var(--success)"><i style="width:7px;height:7px;border-radius:50%;background:var(--success)"></i>在线</span>'
+          : '<span style="display:inline-flex;align-items:center;gap:6px;color:var(--text-3)"><i style="width:7px;height:7px;border-radius:50%;background:#C6CBD4"></i>离线</span>'}</td>
+        <td>${batt(d.battery)}</td>
+        <td class="num" style="color:var(--text-2)">${esc(d.fw_version) || '-'}</td>
+        <td>${d.owner ? `<b>${esc(d.owner)}</b>` : '<span class="tag warn">未绑定</span>'}</td>
+        <td><span class="tag ${SCENE_TAG[d.default_scene] || 'info'}">${SCENES[d.default_scene] || '销售'}</span></td>
+        <td title="${esc(fmt(d.last_seen_at))}" style="color:var(--text-2)">${ago(d.last_seen_at)}</td>
+        <td class="ops"><a onclick="bindDlg(${d.id})">${d.owner ? '改绑' : '绑定'}</a>${d.owner ? ` <a style="color:var(--danger)" onclick="unbind(${d.id})">解绑</a>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;padding:40px 0;color:var(--text-3)">暂无设备。receiver 入库会话会自动注册设备。</td></tr>';
+    const logs = await api('/api/devices/logs').catch(() => []);
+    document.getElementById('logs').innerHTML = logs.map(l => `
+      <tr><td class="num" style="color:var(--text-3)">${fmt(l.ts)}</td><td style="color:var(--text-2)">${esc(shortKey(l.device_key))}</td>
+      <td><span class="tag ${l.action === 'bind' ? 'on' : l.action === 'unbind' ? 'danger' : 'info'}">${ACT[l.action] || l.action}</span></td>
+      <td style="color:var(--text-2)">${esc(l.detail)}</td></tr>`).join('') || '<tr><td colspan="4" style="text-align:center;padding:30px 0;color:var(--text-3)">暂无日志。</td></tr>';
+  };
+
+  window.bindDlg = function (id) {
+    const d = _rows.find(x => x.id === id);
+    if (!d) return;
+    const dialog = dlg().open({
+      title: (d.owner ? '改绑' : '绑定') + '设备 · ' + (d.model || shortKey(d.device_key)),
+      body: `<div class="form-item"><label>持有人（工牌归属员工）</label><input id="_bv-owner" value="${esc(d.owner || '')}" placeholder="员工姓名，如：白添宇"></div>
+        <div class="form-item"><label>设备型号（留空保持不变）</label><input id="_bv-model" value="${esc(d.model || '')}" placeholder="如：ai-passport"></div>
+        <div class="form-item"><label>默认场景（录音入库自动标注，09 册 INT-12）</label>
+          <select id="_bv-scene">${Object.keys(SCENES).map(s => `<option value="${s}" ${(d.default_scene || 'sales') === s ? 'selected' : ''}>${SCENES[s]}</option>`).join('')}</select></div>
+        <div class="muted">绑定后该设备的沟通自动归属持有人（owner 传导）；清空持有人保存即解绑。</div>`,
+      foot: [
+        { label: '取 消' },
+        { label: '保存绑定', cls: 'primary', onClick: async (d2) => {
+          const owner = document.getElementById('_bv-owner').value.trim();
+          const model = document.getElementById('_bv-model').value.trim();
+          const default_scene = document.getElementById('_bv-scene').value;
+          await api('/api/devices/' + id + '/bind', { method: 'POST', body: { owner, model: model || undefined, default_scene } });
+          toast('已保存'); d2.close(); load();
+        } },
+      ],
+    });
+  };
+  window.unbind = async function (id) {
+    const d = _rows.find(x => x.id === id);
+    if (!d || !confirm(`解绑 ${d.model || shortKey(d.device_key)}（持有人 ${d.owner || '-'}）？解绑后新沟通不再自动归属。`)) return;
+    await api('/api/devices/' + id + '/bind', { method: 'POST', body: { owner: '', default_scene: d.default_scene || 'sales' } });
+    toast('已解绑'); load();
+  };
+
+  load();
+})();
+</script>
 </body>
 </html>

@@ -84,6 +84,10 @@ async function prepVisit() {
 }
 async function init() {
   initShell('ask');
+  { // 从全局搜索「问 Ask AI」带入的问题自动提问
+    const q0 = new URLSearchParams(location.search).get('q');
+    if (q0) { document.getElementById('q').value = q0; setTimeout(() => window.ask && window.ask(), 400); }
+  }
   const me = await (await api('/api/me')).json();
   { const w = document.getElementById('who'); if (w) w.textContent = `${me.name}（${me.role}）`; }
 }

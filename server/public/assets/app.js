@@ -271,11 +271,91 @@ function wireShell() {
       if (gi) gi.focus();
     }
   });
-  // 全局搜索 → 沟通列表
+  // 全局搜索扩域（M4）：聚合建议（沟通/客户/知识·案例按权限）+ Ask AI 兜底
   const gs = document.getElementById('gs-input');
-  if (gs) gs.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && gs.value.trim()) location.href = '/communications.html?q=' + encodeURIComponent(gs.value.trim());
-  });
+  if (gs) {
+    let panel = null, hlIdx = -1, debounce = null, results = [];
+    const closePanel = () => { if (panel) { panel.remove(); panel = null; } hlIdx = -1; results = []; };
+    const iconFor = { comm: 'mic', cust: 'users', kb: 'database', case: 'trophy' };
+    const go = (item) => { closePanel(); gs.value = ''; location.href = item.href; };
+    const render = (groups, q) => {
+      closePanel();
+      results = groups.flatMap(g => g.items);
+      if (!results.length && !q) return;
+      panel = document.createElement('div');
+      panel.className = 'gs-panel show';
+      const r = gs.getBoundingClientRect();
+      panel.style.left = Math.max(12, r.left + r.width / 2 - 230) + 'px';
+      panel.style.top = (r.bottom + 8) + 'px';
+      if (!results.length) panel.innerHTML = `<div class="gs-empty">没有匹配的沟通 / 客户${_shellMe && _shellMe.role !== 'sales' ? ' / 配置' : ''}</div>`;
+      else {
+        panel.innerHTML = groups.filter(g => g.items.length).map(g => `
+          <div class="gs-group">${g.name}</div>` +
+          g.items.map(it => `<div class="gs-item" data-idx="${it.idx}">${icon(iconFor[it.kind] || 'search', 15)}<span class="t">${it.t}</span><span class="d">${it.d || ''}</span></div>`).join('')
+        ).join('');
+      }
+      panel.insertAdjacentHTML('beforeend', `<div class="gs-ask">${icon('bot', 15)}<span>问 Ask AI：${esc(q)}</span></div>`);
+      panel.querySelector('.gs-ask').onclick = () => { closePanel(); gs.value = ''; location.href = '/ask.html?q=' + encodeURIComponent(q); };
+      panel.addEventListener('click', (e) => {
+        const item = e.target.closest('.gs-item');
+        if (item) go(results[Number(item.dataset.idx)]);
+      });
+      document.body.appendChild(panel);
+    };
+    const search = async (q) => {
+      const enc = encodeURIComponent(q);
+      const jobs = [
+        api(`/api/communications?q=${enc}`).catch(() => []).then(rows => ({
+          name: '沟通', kind: 'comm',
+          items: (rows || []).slice(0, 3).map(c => ({ kind: 'comm', t: c.topic || ('沟通 #' + c.id), d: (c.created_at || '').slice(5, 10), href: '/communication.html?id=' + c.id })),
+        })),
+        api(`/api/customers?q=${enc}`).catch(() => []).then(rows => ({
+          name: '客户', kind: 'cust',
+          items: (rows || []).slice(0, 3).map(c => ({ kind: 'cust', t: c.name, d: c.owner || '', href: '/customers.html?q=' + encodeURIComponent(c.name) })),
+        })),
+      ];
+      if (_shellMe && _shellMe.role !== 'sales') {
+        jobs.push(api('/api/config/knowledge_base').catch(() => []).then(rows => ({
+          name: '知识库', kind: 'kb',
+          items: (rows || []).filter(x => (x.name + (x.data?.content || '')).includes(q)).slice(0, 2)
+            .map(x => ({ kind: 'kb', t: x.name, d: '知识', href: '/config.html?domain=knowledge_base' })),
+        })));
+        jobs.push(api('/api/config/case_library').catch(() => []).then(rows => ({
+          name: '案例库', kind: 'case',
+          items: (rows || []).filter(x => (x.name + (x.data?.script || '')).includes(q)).slice(0, 2)
+            .map(x => ({ kind: 'case', t: x.name, d: '案例', href: '/config.html?domain=case_library' })),
+        })));
+      }
+      const groups = (await Promise.all(jobs)).map(g => ({ ...g, items: g.items.map(it => ({ ...it })) }));
+      let idx = 0;
+      for (const g of groups) for (const it of g.items) it.idx = idx++;
+      render(groups, q);
+    };
+    gs.addEventListener('input', () => {
+      clearTimeout(debounce);
+      const q = gs.value.trim();
+      if (!q) { closePanel(); return; }
+      debounce = setTimeout(() => search(q).catch(() => {}), 250);
+    });
+    gs.addEventListener('keydown', (e) => {
+      const items = panel ? [...panel.querySelectorAll('.gs-item')] : [];
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (hlIdx >= 0 && results[hlIdx]) go(results[hlIdx]);
+        else location.href = '/communications.html?q=' + encodeURIComponent(gs.value.trim());
+      } else if (e.key === 'Escape') { closePanel(); gs.blur(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!items.length) return;
+        e.preventDefault();
+        hlIdx = e.key === 'ArrowDown' ? (hlIdx + 1) % items.length : (hlIdx - 1 + items.length) % items.length;
+        items.forEach((el, i) => el.classList.toggle('hl', i === hlIdx));
+        items[hlIdx].scrollIntoView({ block: 'nearest' });
+      }
+    });
+    document.addEventListener('click', (e) => {
+      if (panel && !panel.contains(e.target) && e.target !== gs) closePanel();
+    });
+  }
   // 账户菜单
   const avBtn = document.getElementById('av-btn');
   const accMenu = document.getElementById('acc-menu');

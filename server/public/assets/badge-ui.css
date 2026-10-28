@@ -82,6 +82,31 @@ button { font-family: inherit; }
 }
 .top-ic:hover { background: var(--bg); }
 .top-ic .dot { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--primary); border: 1.5px solid #fff; }
+/* 全局搜索建议面板 */
+.gs-panel {
+  position: fixed; z-index: 140; width: 460px; max-width: 92vw; background: var(--card);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-pop);
+  padding: 6px; display: none; max-height: 62vh; overflow-y: auto;
+}
+.gs-panel.show { display: block; animation: popUp .15s ease; }
+.gs-panel .gs-group { font-size: 12px; font-weight: 600; color: var(--text-3); padding: 8px 10px 3px; }
+.gs-panel .gs-item {
+  display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px;
+  cursor: pointer; font-size: 13.5px; color: var(--text);
+}
+.gs-panel .gs-item svg { color: var(--text-3); flex: none; }
+.gs-panel .gs-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-panel .gs-item .d { font-size: 12px; color: var(--text-3); flex: none; }
+.gs-panel .gs-item:hover, .gs-panel .gs-item.hl { background: var(--primary-light); }
+.gs-panel .gs-item:hover .t, .gs-panel .gs-item.hl .t { color: var(--primary-ink); }
+.gs-panel .gs-ask {
+  display: flex; align-items: center; gap: 9px; padding: 9px 10px; margin-top: 4px;
+  border-top: 1px solid #F0F2F7; cursor: pointer; font-size: 13.5px; color: var(--primary-ink);
+  border-radius: 8px;
+}
+.gs-panel .gs-ask:hover { background: var(--primary-light); }
+.gs-panel .gs-empty { padding: 14px 10px; font-size: 13px; color: var(--text-3); text-align: center; }
+
 .topbar .avatar {
   width: 28px; height: 28px; border-radius: 50%; background: var(--primary-grad);
   color: #fff; display: flex; align-items: center; justify-content: center;

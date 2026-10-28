@@ -237,6 +237,30 @@ function checkOverdueTodos() {
   return n;
 }
 
+/** 沟通计划主动提醒（M4）：今日日程 + 过期未完成，站内信通知负责人，每条每日一次 */
+function checkPlanReminders() {
+  const today = new Date().toISOString().slice(0, 10);
+  let n = 0;
+  const rows = db.prepare(`SELECT p.id, p.title, p.plan_at, p.owner, p.reminded_on, c.name AS cust
+    FROM plans p LEFT JOIN customers c ON c.id = p.customer_id
+    WHERE p.status='planned' AND length(p.plan_at) >= 10 AND p.owner != ''
+      AND substr(p.plan_at,1,10) <= ? AND (p.reminded_on IS NULL OR p.reminded_on != ?)`).all(today, today);
+  for (const p of rows) {
+    const day = p.plan_at.slice(0, 10);
+    const overdue = day < today;
+    const at = p.plan_at.length > 10 ? ' ' + p.plan_at.slice(11, 16) : '';
+    const msg = overdue
+      ? `日程「${p.title}」（${day}${at}${p.cust ? ' · ' + p.cust : ''}）已过期仍未完成，请跟进或标记完成。`
+      : `今天有日程：${p.title}（${at.trim() || '全天'}${p.cust ? ' · ' + p.cust : ''}），记得访前准备。`;
+    db.prepare('INSERT INTO notifications(user, title, body, created_at) VALUES(?,?,?,?)')
+      .run(p.owner, overdue ? '日程已过期' : '今日日程', msg, new Date().toISOString());
+    db.prepare('UPDATE plans SET reminded_on=? WHERE id=?').run(today, p.id);
+    audit(db, 'scheduler', 'plan_remind', `plan#${p.id}`, overdue ? 'overdue' : 'today');
+    n++;
+  }
+  return n;
+}
+
 /** Ask AI 检索（AI-08 简版 RAG，内部使用：滑窗关键词匹配，不依赖向量库） */
 function extractTerms(q) {
   const stop = new Set(['什么', '怎么', '哪些', '请问', '一下', '关于', '最近', '情况', '我们', '他们', '这个', '那个', '如何', '为什么', '多少']);
@@ -818,6 +842,9 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/silence-check' && method === 'POST' && me.role === 'admin') {
     return sendJson(res, 200, { notified: checkSilence() });
   }
+  if (pathname === '/api/plan-check' && method === 'POST' && me.role === 'admin') {
+    return sendJson(res, 200, { reminded: checkPlanReminders() });
+  }
   // 手动收口（09 册 INT-02/K6：累积模式的会议缓冲立即聚合入库；代理到接收端 /session/close）
   if (pathname === '/api/session/close' && method === 'POST' && me.role === 'admin') {
     const receiver = getSetting(db, 'receiver') || {};
@@ -996,7 +1023,7 @@ async function handleApi(req, res, url) {
       if (!b.title) throw new HttpError(400, '需要标题');
       const r = db.prepare('INSERT INTO plans(title, customer_id, owner, plan_at, flow, info_fields, created_at) VALUES(?,?,?,?,?,?,?)')
         .run(String(b.title), b.customer_id ? Number(b.customer_id) : null,
-          String(b.owner || (me.role === 'sales' ? me.name : '')), b.plan_at || '', String(b.flow || ''),
+          String(b.owner || me.name), b.plan_at || '', String(b.flow || ''),  // owner 缺省=创建者（日程提醒需要负责人）
           JSON.stringify(b.info_fields || {}), new Date().toISOString());
       audit(db, me.name, 'plan_create', `plan#${r.lastInsertRowid}`, b.title);
       return sendJson(res, 200, { id: Number(r.lastInsertRowid) });
@@ -1430,6 +1457,8 @@ try {
   if (backfilled) console.log(`[待办] 存量报告回填 ${backfilled} 条`);
 } catch (e) { console.error('[待办] 回填失败:', e.message); }
 setInterval(() => { try { checkOverdueTodos(); } catch (e) { console.error('[待办到期]', e.message); } }, 3600 * 1000).unref();
+try { const rn = checkPlanReminders(); if (rn) console.log(`[日程提醒] ${rn} 条`); } catch (e) { console.error('[日程提醒]', e.message); }
+setInterval(() => { try { checkPlanReminders(); } catch (e) { console.error('[日程提醒]', e.message); } }, 3600 * 1000).unref();
 startScheduler();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
