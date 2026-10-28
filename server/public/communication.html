@@ -22,6 +22,7 @@ const id = new URLSearchParams(location.search).get('id');
   const curScene = SCENE[c.scene] ? c.scene : 'sales';
   const ROLE_COLOR = { '销售': 'info', '设计师': 'info', '客户': 'success', '店长': 'warn' };
   const hasAudio = !!c.audio_path;
+  const SCENE_KB_LABEL = { sales: '销售沟通', meeting: '会议纪要', training: '培训沉淀' };
   const fmtSec = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   /** 逐句解析（录音回放对照）：优先 [MM:SS] 时间戳（讯飞分离回填=精确）；
    *  无时间戳的转写（实时听写）按字符占比估时（语速近似，UI 标注 ~） */
@@ -87,7 +88,15 @@ const id = new URLSearchParams(location.search).get('id');
     if (scene === 'talk' && !confirm('切换为「管理谈话」后，该记录仅参与者与管理员可见（INT-40），确认？')) return;
     toast('已改标，重新分析中…');
     await api(`/api/communications/${id}/scene`, { method: 'POST', body: { scene } }).catch(() => {});
-    setTimeout(() => location.reload(), 2500);
+    // 轮询等重析完成再刷新（真实 LLM 耗时数秒~数十秒，固定延时曾拿到旧报告）
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const d = await api(`/api/communications/${id}`);
+        if (d.status === 'analyzed' || d.status === 'failed') break;
+      } catch { break; }
+    }
+    location.reload();
   };
 
   window.show = (i, el) => {
@@ -101,6 +110,22 @@ const id = new URLSearchParams(location.search).get('id');
     e.target.disabled = true;
     try { await api('/api/todos/' + e.target.dataset.id + '/toggle', { method: 'POST' }); setTimeout(() => location.reload(), 300); }
     catch { e.target.disabled = false; }
+  });
+
+  // 知识反哺（M4）：入库提交（幂等由服务端保证）
+  window.saveKb = async function (btn) {
+    btn.style.opacity = '.45'; btn.style.pointerEvents = 'none';
+    try {
+      const r = await api('/api/kb-entry', { method: 'POST', body: {
+        comm_id: c.id, domain: btn.dataset.domain, name: btn.dataset.name,
+        content: btn.dataset.content, scenario: btn.dataset.scenario,
+      }});
+      toast(r.existed ? '该内容已在库中，无需重复入库' : (btn.dataset.domain === 'case_library' ? '已入案例库' : '已入知识库') + '，Ask AI 与全员可检索');
+      btn.textContent = r.existed ? '已在库' : '已入库';
+    } catch { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+  };
+  main.addEventListener('click', (e) => {
+    if (e.target.classList.contains('kb-btn')) saveKb(e.target);
   });
 
   // 录音回放对照（REC-05）：点句跳播 + 播放中当前句高亮
@@ -161,6 +186,13 @@ const id = new URLSearchParams(location.search).get('id');
     if (!rp) return '<div class="empty"><div class="empty-badge">' + icon('bot', 20) + '</div>暂无分析结果。点击右上角「重新分析」生成。</div>';
     const sec = (title, inner) => `<div class="card" style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:10px">${title}</div>${inner}</div>`;
     const list = arr => '<ul style="margin:8px 0 0 18px;line-height:1.9">' + (arr || []).map(s => `<li>${esc(s)}</li>`).join('') + '<li style="list-style:none;color:var(--text-3)">' + ((arr || []).length ? '' : '无') + '</li></ul>';
+    // 知识反哺（M4）：入库按钮（调 POST /api/kb-entry，幂等）
+    const kbBtn = (domain, name, content, scenario, label) =>
+      `<a class="kb-btn" data-domain="${domain}" data-name="${esc(name).slice(0, 60)}" data-content="${esc(content)}" data-scenario="${esc(scenario || '')}" style="margin-left:8px;font-size:12px;color:var(--primary-ink);cursor:pointer;white-space:nowrap">${label || '入库'}</a>`;
+    const sinkBar = rp.summary ? `<div class="card" style="margin-bottom:14px;display:flex;align-items:center;gap:10px;padding:12px 18px">
+      <span style="font-size:12.5px;color:var(--text-3)">把这条${SCENE_KB_LABEL[scene] || '沟通'}沉淀为团队资产：</span>
+      ${kbBtn('case_library', (c.topic || '沟通#' + c.id) + '（' + fmtTime(c.created_at).slice(0, 10) + '）', rp.summary, SCENE_KB_LABEL[scene] || curScene, '存为案例')}
+      <span style="flex:1"></span><span style="font-size:12px;color:var(--text-3)">入库后 Ask AI 与全员可检索</span></div>` : '';
     // —— 会议纪要（09 册 §4.1）——
     if (scene === 'meeting') {
       let html = sec('分议题摘要', (rp.topics || []).map(t => `
@@ -176,18 +208,19 @@ const id = new URLSearchParams(location.search).get('id');
           <div style="color:var(--text-3);font-size:12.5px">状态：${esc(d.status || '')}</div></div>`).join('') : '<span class="tag on">未检出明显争议</span>');
       html += sec('未决事项（下次会议回顾）', list(rp.open_issues));
       html += sec('发言人数估计', `<span class="tag info">${rp.attendees_hint ?? '-'} 人</span>（参会人请人工确认）`);
-      return appendHistory(html, rp);
+      return appendHistory(sinkBar + html, rp);
     }
     // —— 培训/讲座（09 册 §4.2）——
     if (scene === 'training') {
       let html = sec('知识点', (rp.knowledge_points || []).map(k => `
-        <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><b>${esc(k.point || '-')}</b>
+        <div style="display:flex;align-items:baseline;gap:6px;padding:8px 0;border-bottom:1px solid #f3f4f6"><span style="flex:1;min-width:0"><b>${esc(k.point || '-')}</b>
           <div style="color:var(--text-2);margin-top:3px">${esc(k.detail || '')}</div>
-          <div style="color:var(--text-3);font-size:12.5px;margin-top:3px">依据：${esc(k.evidence || '')}</div></div>`).join('') || '无');
+          <div style="color:var(--text-3);font-size:12.5px;margin-top:3px">依据：${esc(k.evidence || '')}</div></span>${kbBtn('knowledge_base', k.point || '培训知识点', (k.detail || '') + (k.evidence ? '（依据：' + k.evidence + '）' : ''), '培训知识点', '入知识库')}</div>`).join('') || '无');
       if ((rp.qa || []).length) html += sec('现场答疑', rp.qa.map(x => `<div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><span class="tag info">问</span> ${esc(x.q || '')}<div style="margin-top:3px"><span class="tag on">答</span> ${esc(x.a || '')}</div></div>`).join(''));
-      if ((rp.quotes || []).length) html += sec('金句 / 关键表述', list(rp.quotes));
+      if ((rp.quotes || []).length) html += sec('金句 / 关键表述', rp.quotes.map(q => `
+        <div style="display:flex;align-items:baseline;gap:6px;padding:6px 0;border-bottom:1px solid #f3f4f6"><span style="flex:1;min-width:0">${esc(q)}</span>${kbBtn('case_library', q.slice(0, 30) + (q.length > 30 ? '…' : ''), q, '培训金句', '入案例库')}</div>`).join(''));
       if ((rp.chapters || []).length) html += sec('内容章节', rp.chapters.map(ch => `<div style="padding:6px 0;border-bottom:1px solid #f3f4f6">${ch.time_hint ? `<span class="tag off">${esc(ch.time_hint)}</span> ` : ''}<b>${esc(ch.title || '')}</b> <span style="color:var(--text-2);font-size:13px">${esc(ch.gist || '')}</span></div>`).join(''));
-      return appendHistory(html, rp);
+      return appendHistory(sinkBar + html, rp);
     }
     // —— 管理谈话（09 册 §4.3；K5 红线：无评分类字段）——
     if (scene === 'talk') {
@@ -225,7 +258,7 @@ const id = new URLSearchParams(location.search).get('id');
       <div style="padding:8px 0;border-bottom:1px solid #f3f4f6"><span class="tag danger">${esc(v.severity || '中')}</span> <b>${esc(v.item)}</b>
       <div style="color:var(--text-2);font-size:13px;margin-top:4px">证据：${esc(v.evidence || '')}</div></div>`).join(''));
     else html += sec('违规检测（ANA-08）', '<span class="tag on">已完成全量违规项检测，未发现任何违规内容</span>');
-    return appendHistory(html, rp);
+    return appendHistory(sinkBar + html, rp);
   }
   /** 改标历史（INT-11：旧报告版本化留存，可回看） */
   function appendHistory(html, rp) {

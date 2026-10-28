@@ -604,6 +604,40 @@ async function handleApi(req, res, url) {
     }
     return;
   }
+  // 知识反哺（M4）：沟通报告内容一键入知识库/案例库——sales 对自己可见的沟通也可贡献（正路，绕开配置域 CRUD 的角色限制）
+  if (pathname === '/api/kb-entry' && method === 'POST') {
+    const b = await readBody(req);
+    const domain = b.domain;
+    if (!['knowledge_base', 'case_library'].includes(domain)) throw new HttpError(400, 'domain 须为 knowledge_base 或 case_library');
+    const commId = Number(b.comm_id);
+    const row = db.prepare('SELECT id, scene, owner, participants, topic FROM communications WHERE id=?').get(commId);
+    if (!row) throw new HttpError(404, '沟通记录不存在');
+    const owners = visibleOwners(me);
+    if (row.scene === 'talk') {
+      if (!canSeeComm(me, row)) throw new HttpError(403, '无权访问该记录（谈话记录仅参与者可见，INT-40）');
+    } else if (owners && !owners.includes(row.owner)) {
+      throw new HttpError(403, '无权访问该记录（数据范围）');
+    }
+    const name = redactText(String(b.name || '')).trim().slice(0, 80);
+    const content = redactText(String(b.content || '')).trim().slice(0, 2000);
+    if (!name || !content) throw new HttpError(400, 'name 与 content 必填');
+    const data = {
+      ...(domain === 'case_library' ? { scenario: redactText(String(b.scenario || '')).trim().slice(0, 60) } : {}),
+      content: domain === 'case_library' ? content : content, // case 列用 script 展示，另存 content 冗余
+      ...(domain === 'case_library' ? { script: content } : {}),
+      source_comm_id: commId,
+      source_scene: row.scene,
+      author: me.name,
+      key: crypto.createHash('sha1').update(content).digest('hex').slice(0, 12),
+    };
+    // 幂等：同一沟通+同一内容不重复入库
+    const dup = db.prepare("SELECT id FROM config_items WHERE domain=? AND data LIKE ?").get(domain, `%"key":"${data.key}"%`);
+    if (dup) return sendJson(res, 200, { id: dup.id, existed: true });
+    const id = Number(db.prepare('INSERT INTO config_items(domain, name, enabled, sort, data, updated_at) VALUES(?,?,1,0,?,?)')
+      .run(domain, name, JSON.stringify(data), new Date().toISOString()).lastInsertRowid);
+    audit(db, me.name, 'kb_entry', `${domain}#${id}`, `comm#${commId} ${name}`);
+    return sendJson(res, 200, { id, existed: false });
+  }
   if ((m = pathname.match(/^\/api\/communications\/(\d+)$/))) {
     const id = Number(m[1]);
     const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);

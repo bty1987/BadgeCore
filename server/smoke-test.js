@@ -251,6 +251,18 @@ async function runWecomWebhookSuite() {
     check('REC-05 Range 请求 206（浏览器拖动必需）', r.status === 206 && r.headers.get('content-range') === 'bytes 0-99/1024');
     const audioCommId = ing2.id;
 
+    // 6d. 知识反哺（M4）：入库 + 幂等 + 权限
+    r = await api('POST', '/api/kb-entry', { comm_id: ingestData.id, domain: 'case_library', name: '冒烟金句案例', content: '准备十个好问题，胜过准备十套话术。', scenario: '销售沟通' });
+    const kbId = r.data?.id;
+    check('M4 报告内容入案例库', r.status === 200 && kbId > 0);
+    r = await api('POST', '/api/kb-entry', { comm_id: ingestData.id, domain: 'case_library', name: '冒烟金句案例2', content: '准备十个好问题，胜过准备十套话术。' });
+    check('M4 同内容幂等（不重复入库）', r.data?.existed === true && r.data?.id === kbId);
+    r = await api('GET', '/api/config/case_library');
+    const kbRow = (r.data || []).find(x => x.id === kbId);
+    check('M4 案例库可见（scenario/script 落位）', kbRow?.data?.script?.includes('十个好问题') && kbRow?.data?.source_comm_id === ingestData.id);
+    r = await api('POST', '/api/kb-entry', { comm_id: ingestData.id, domain: 'violations', name: 'x', content: 'y' });
+    check('M4 非法 domain 拒绝', r.status === 400);
+
     // 7. LLM 连通测试端点
     r = await api('POST', '/api/llm-test');
     check('LLM 连通测试（mock）', r.data?.ok === true);
@@ -271,6 +283,14 @@ async function runWecomWebhookSuite() {
     check('配置页权限：sales 403', r.status === 403);
     r = await api('GET', '/api/todos');
     check('M4 数据范围：sales 看不到他人待办', r.status === 200 && r.data?.length === 0);
+    r = await api('POST', '/api/kb-entry', { comm_id: ingestData.id, domain: 'knowledge_base', name: '越权', content: '越权内容' });
+    check('M4 数据范围：sales 他人沟通不可入库 403', r.status === 403);
+    const ownIngest = await (await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 3, device: 'sim-device', owner: 'sales01', topic: 'sales01 自己的沟通', transcript: '说话人1: 我总结一条经验：先听需求再谈方案。' }),
+    })).json();
+    r = await api('POST', '/api/kb-entry', { comm_id: ownIngest.id, domain: 'knowledge_base', name: '销售经验', content: '先听需求再谈方案。' });
+    check('M4 sales 本人沟通可入库（贡献正路）', r.status === 200 && r.data?.id > 0);
     cookie = savedCookie;
 
     // 9. Ask AI（AI-08 简版 RAG）
