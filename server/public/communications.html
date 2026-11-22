@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>沟通 - BadgeCore</title>
-<link rel="stylesheet" href="/assets/badge-ui.css">
-<script src="/assets/app.js"></script>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122a">
+<script src="/assets/app.js?v=20261122a"></script>
 </head>
 <body>
 <script>
@@ -43,7 +43,7 @@
     const rows = await api(`/api/communications?q=${encodeURIComponent(q)}${st ? '&status=' + st : ''}${sc ? '&scene=' + sc : ''}`);
     document.getElementById('count').textContent = `共 ${rows.length} 条`;
     renderTable(document.getElementById('tbl'), [
-      { key: 'topic', title: '主题', render: r => `<a href="/communication.html?id=${r.id}">${esc(r.topic || '沟通 #' + r.id)}</a>` },
+      { key: 'topic', title: '主题', render: r => `<a href="/communication.html?id=${r.id}">${esc(r.topic || topicFallback(r))}</a>` },
       { key: 'scene', title: '场景', w: '70px', render: r => { const s = SCENE[r.scene] || ['销售', 'info']; return `<span class="tag ${s[1]}">${s[0]}</span>`; } },
       { key: 'owner', title: '销售', w: '90px', render: r => esc(r.owner || '-') },
       { key: 'duration_s', title: '时长', w: '80px', render: r => r.duration_s ? Math.floor(r.duration_s / 60) + '′' + (r.duration_s % 60) + '″' : '-' },

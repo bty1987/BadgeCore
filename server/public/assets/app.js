@@ -103,6 +103,11 @@ function dlg() {
     close: api.close,
   };
 }
+/** 沟通主题回落：topic 空/占位时显示「场景+日期」而非「沟通 #id」（无信息量） */
+function topicFallback(r) {
+  const SC = { sales: '销售沟通', meeting: '会议', training: '培训', talk: '谈话' };
+  return `${SC[r.scene] || '沟通'}（${String(r.created_at || '').slice(5, 10)}）`;
+}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function fmtTime(s) { return s ? s.replace('T', ' ').slice(0, 16) : '-'; }
 /** 通用表格渲染：renderTable(mount, columns, rows, ops) */
@@ -307,7 +312,7 @@ function wireShell() {
       const jobs = [
         api(`/api/communications?q=${enc}`).catch(() => []).then(rows => ({
           name: '沟通', kind: 'comm',
-          items: (rows || []).slice(0, 3).map(c => ({ kind: 'comm', t: c.topic || ('沟通 #' + c.id), d: (c.created_at || '').slice(5, 10), href: '/communication.html?id=' + c.id })),
+          items: (rows || []).slice(0, 3).map(c => ({ kind: 'comm', t: c.topic || topicFallback(c), d: c.topic ? (c.created_at || '').slice(5, 10) : '', href: '/communication.html?id=' + c.id })),
         })),
         api(`/api/customers?q=${enc}`).catch(() => []).then(rows => ({
           name: '客户', kind: 'cust',

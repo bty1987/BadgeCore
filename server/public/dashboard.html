@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>指挥舱 · 数据看板 - BadgeCore</title>
-<link rel="stylesheet" href="/assets/badge-ui.css">
-<script src="/assets/app.js"></script>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122a">
+<script src="/assets/app.js?v=20261122a"></script>
 <style>
   .bar { height: 10px; border-radius: 5px; background: var(--primary-light); overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--primary); border-radius: 5px; }
@@ -71,7 +71,7 @@ let D = null;
       : '<span class="tag on">已完成全量违规项检测，未发现任何违规内容</span>'}</div>`;
     document.getElementById('view5').innerHTML = `<div class="card" style="padding:0"><table class="tbl"><thead><tr><th>时间</th><th>销售</th><th>主题</th><th>状态</th><th>预警</th></tr></thead><tbody>
       ${D.recent.map(r => `<tr><td>${fmtTime(r.created_at)}</td><td>${esc(r.owner || '-')}</td>
-        <td><a href="/communication.html?id=${r.id}">${esc(r.topic || '沟通 #' + r.id)}</a></td>
+        <td><a href="/communication.html?id=${r.id}">${esc(r.topic || topicFallback(r))}</a></td>
         <td>${esc(r.status || '-')}</td><td>${r.alerts ? `<span class="tag danger">${r.alerts} 条</span>` : '-'}</td></tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-3);padding:20px">暂无沟通</td></tr>'}</tbody></table></div>`;
     document.getElementById('view6').innerHTML = `<div class="card" style="padding:16px">
       <div style="font-weight:600;margin-bottom:10px">导出（CMP-13 水印导出）</div>

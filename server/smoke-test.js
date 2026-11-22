@@ -318,6 +318,26 @@ async function runWecomWebhookSuite() {
     r = await api('POST', '/api/admin/device-offline-check');
     check('离线判定幂等（已 offline 不重复通知）', r.status === 200 && r.data?.offline === 0);
 
+    // 7.6 主题内容化：默认主题 live 生成 + 历史回填端点 + 前端回落静态清零
+    const autoT = await (await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 3, device: 'sim-device', owner: '张三', transcript: '说话人1: 客户认可方案，约好下周二带预算来签约。' }),
+    })).json();
+    await new Promise(rr => setTimeout(rr, 300)); // 自动 Mock 分析异步完成
+    r = await api('GET', `/api/communications/${autoT.id}`);
+    check('默认主题 live 生成（非「沟通 #」占位）', r.data?.topic && !/^沟通 ?#/.test(r.data.topic));
+    const _dbz = openDb(dbFile); // 直接改库模拟历史记录（分析完成但主题空）
+    _dbz.prepare('UPDATE communications SET topic=? WHERE id=?').run('', autoT.id);
+    _dbz.close();
+    r = await api('POST', '/api/admin/backfill-topics');
+    check('backfill 端点 admin 200 且修复计数≥1', r.status === 200 && r.data?.fixed >= 1);
+    r = await api('GET', `/api/communications/${autoT.id}`);
+    check('回填后主题读回非空', r.data?.topic && r.data.topic.trim() !== '');
+    for (const pg of ['communications.html', 'communication.html', 'index.html', 'dashboard.html', 'assets/app.js']) {
+      const txt = fs.readFileSync(path.join(__dirname, 'public', pg), 'utf-8');
+      check(`前端「沟通#」回落清零（${pg}）`, !/['"`]沟通 ?#' ?\+/.test(txt));
+    }
+
     // 8. 用户与数据范围
     r = await api('POST', '/api/plans', { title: 'admin 冒烟计划' });
     check('新增管理计划', r.status === 200);
@@ -339,6 +359,8 @@ async function runWecomWebhookSuite() {
     check('M4 数据范围：sales 看不到他人待办', r.status === 200 && r.data?.length === 0);
     r = await api('POST', '/api/kb-entry', { comm_id: ingestData.id, domain: 'knowledge_base', name: '越权', content: '越权内容' });
     check('M4 数据范围：sales 他人沟通不可入库 403', r.status === 403);
+    r = await api('POST', '/api/admin/backfill-topics');
+    check('backfill 端点 sales 403', r.status === 403);
     r = await api('POST', `/api/communications/${ingestData.id}/analyze`);
     check('数据范围：sales 他人记录重析 403', r.status === 403);
     r = await api('POST', `/api/communications/${ingestData.id}/scene`, { scene: 'talk', participants: 'sales01' });

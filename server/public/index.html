@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>首页 - BadgeCore</title>
-<link rel="stylesheet" href="/assets/badge-ui.css">
-<script src="/assets/app.js"></script>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122a">
+<script src="/assets/app.js?v=20261122a"></script>
 </head>
 <body>
 <script>
@@ -69,7 +69,7 @@
     document.getElementById('greet-sub').textContent = `${dateStr} · 今天有 ${todayPlans.length} 场日程、${open.length} 件待办`;
     const todoRow = (t, last) => `<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;${last ? '' : 'border-bottom:1px solid #F0F2F7;'}font-size:13.5px">
       <input type="checkbox" class="td-ck" data-id="${t.id}" style="width:16px;height:16px;accent-color:#3370FF;cursor:pointer;flex:none" aria-label="完成待办">
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.what)}<div style="font-size:12px;color:var(--text-3)">${esc(t.topic || '沟通#' + t.comm_id)}${t.kind === 'action' ? ' · 行动项' : ''}${t.owner && t.owner !== me.name ? ' · ' + esc(t.owner) : ''}</div></span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.what)}<div style="font-size:12px;color:var(--text-3)">${esc(t.topic || '关联沟通 #' + t.comm_id)}${t.kind === 'action' ? ' · 行动项' : ''}${t.owner && t.owner !== me.name ? ' · ' + esc(t.owner) : ''}</div></span>
       ${t.due ? `<span class="tag ${t.due < today ? 'danger' : 'warn'}">${t.due < today ? '已到期' : ''} ${esc(t.due)}</span>` : ''}
     </div>`;
     document.getElementById('todo-list').innerHTML = open.length
@@ -94,7 +94,7 @@
   // 情报中心：风险关键词命中的沟通
   const risky = comms.filter(c => c.meta && (JSON.parse(c.meta).alerts || []).length);
   document.getElementById('intel').innerHTML = risky.length
-    ? risky.slice(0, 5).map((c, i, a) => rowHTML(`<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="/communication.html?id=${c.id}">${esc(c.topic || '沟通#' + c.id)}</a></span><span class="tag danger">风险提示</span><span class="num" style="color:var(--text-3);font-size:12.5px">${(c.created_at || '').slice(5, 10)}</span>`, i === a.length - 1)).join('')
+    ? risky.slice(0, 5).map((c, i, a) => rowHTML(`<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="/communication.html?id=${c.id}">${esc(c.topic || topicFallback(c))}</a></span><span class="tag danger">风险提示</span><span class="num" style="color:var(--text-3);font-size:12.5px">${(c.created_at || '').slice(5, 10)}</span>`, i === a.length - 1)).join('')
     : emptyBox('inbox', '暂无风险提醒');
 })();
 </script>

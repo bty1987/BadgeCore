@@ -386,6 +386,39 @@ function canSeeComm(me, row) {
   return parts.includes(me.name) || (row.owner && row.owner === me.name);
 }
 
+/** 默认主题生成：topic 空/无意义（「沟通 #id」回落占位）时按报告自动生成摘要主题（场景+客户+摘要首句）；
+    人工已填主题不覆盖。列表只显示「沟通 #31」无信息量的根治。 */
+function buildAutoTopic(row, report) {
+  const cur = String(row.topic || '').trim();
+  if (cur && cur !== '(无主题)' && !/^沟通 #\d+$/.test(cur)) return cur; // 人工已填，不覆盖
+  const SC = { sales: '销售沟通', meeting: '会议', training: '培训', talk: '谈话' };
+  const sceneTxt = SC[row.scene] || '沟通';
+  const cust = row.customer_id ? (db.prepare('SELECT name FROM customers WHERE id=?').get(row.customer_id) || {}).name : '';
+  const who = cust ? '· ' + cust : '';
+  const summary = String((report && report.summary) || '').trim();
+  if (summary) {
+    const first = summary.split(/[。；;\n]/)[0].trim();
+    if (first) return `${sceneTxt}${who}：${first.slice(0, 30)}${first.length > 30 ? '…' : ''}`;
+  }
+  const kf = (report && report.key_facts || [])[0];
+  if (kf && kf.k) return `${sceneTxt}${who}：${String(kf.k).slice(0, 24)}`;
+  return `${sceneTxt}${who}（${String(row.created_at || '').slice(5, 10)}）`;
+}
+
+/** 历史主题回填：分析完成但 topic 空的记录按报告生成默认主题（幂等，仅填空主题，留审计）。
+    启动即跑（修历史记录），也可 POST /api/admin/backfill-topics 手动触发。 */
+function backfillTopics() {
+  const rows = db.prepare("SELECT id, topic, scene, customer_id, created_at, report FROM communications WHERE (topic IS NULL OR topic='') AND report IS NOT NULL AND report != ''").all();
+  let n = 0;
+  for (const row of rows) {
+    let rp = null; try { rp = JSON.parse(row.report); } catch { continue; }
+    const t = buildAutoTopic(row, rp);
+    if (t && t.trim()) { db.prepare('UPDATE communications SET topic=? WHERE id=?').run(t, row.id); n++; }
+  }
+  if (n) audit(db, 'system', 'topic_backfill', '', `count=${n}`);
+  return { scanned: rows.length, fixed: n };
+}
+
 const analyzingNow = new Set(); // 进程内正在分析的 commId（重启清空=中断的分析由救援重跑）
 async function runAnalysis(commId, actor) {
   analyzingNow.add(Number(commId));
@@ -400,8 +433,10 @@ async function runAnalysisInner(commId, actor) {
   db.prepare('UPDATE communications SET status=? WHERE id=?').run('analyzing', commId);
   try {
     const report = await analyzeCommunication(llm, row.transcript || '', loadAnalysisConfig(), row.scene);
-    db.prepare('UPDATE communications SET report=?, status=? WHERE id=?')
-      .run(JSON.stringify(report), 'analyzed', commId);
+    // 默认主题：分析完成后 topic 空/占位时按报告自动生成摘要主题（人工已填不覆盖）
+    const autoTopic = buildAutoTopic(row, report);
+    db.prepare('UPDATE communications SET report=?, status=?, topic=? WHERE id=?')
+      .run(JSON.stringify(report), 'analyzed', autoTopic, commId);
     try { syncTodos(commId, report); } catch (e) { console.error('[待办同步]', e.message); } // M4：提取入 todos 表（失败不阻断分析）
     audit(db, actor, 'analyze', `comm#${commId}`, `scene=${row.scene} model=${report.meta.model}`);
     if (row.scene === 'meeting') await pushMeetingMinutes(commId, row, report); // 10 册 W1 hook②：纪要摘要卡（开关内）
@@ -1139,6 +1174,13 @@ async function handleApi(req, res, url) {
     audit(db, me.name, 'db_backup', '', `${path.basename(r.file)} ${r.size}B`);
     return sendJson(res, 200, { ok: true, file: path.basename(r.file), size: r.size });
   }
+  // 历史主题回填手动触发（admin）：分析完成但主题空的记录按报告生成默认主题（启动也自动跑）
+  if (pathname === '/api/admin/backfill-topics' && method === 'POST') {
+    if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
+    const r = backfillTopics();
+    audit(db, me.name, 'topic_backfill_manual', '', `fixed=${r.fixed} scanned=${r.scanned}`);
+    return sendJson(res, 200, { ok: true, ...r });
+  }
 
   // 设备管理（04 册：台账/绑定/操作日志；固件升级缓期 D16——receiver OTA 即开发期通道）
   if (pathname === '/api/devices' && method === 'GET') {
@@ -1565,6 +1607,7 @@ rescueAnalyzing().catch(e => console.error('[救援-启动]', e.message)); // �
 setInterval(() => { rescueAnalyzing().catch(e => console.error('[救援]', e.message)); }, 10 * 60_000).unref(); // analyzing 卡死救援兜底
 try { checkDeviceOffline(); } catch (e) { console.error('[设备离线]', e.message); } // 启动即判一轮
 setInterval(() => { try { checkDeviceOffline(); } catch (e) { console.error('[设备离线]', e.message); } }, 3600 * 1000).unref();
+try { const bf = backfillTopics(); if (bf.fixed) console.log(`[主题回填] ${bf.fixed}/${bf.scanned} 条历史记录已生成默认主题`); } catch (e) { console.error('[主题回填]', e.message); }
 startScheduler();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>沟通详情 - BadgeCore</title>
-<link rel="stylesheet" href="/assets/badge-ui.css">
-<script src="/assets/app.js"></script>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122a">
+<script src="/assets/app.js?v=20261122a"></script>
 </head>
 <body>
 <script>
@@ -55,7 +55,7 @@ const id = new URLSearchParams(location.search).get('id');
   }
   main.innerHTML = `
     <div class="page-head"><a href="/communications.html">‹ 返回沟通列表</a>
-      <h1 style="font-size:16px">${esc(c.topic || '沟通 #' + c.id)}</h1>
+      <h1 style="font-size:16px">${esc(c.topic || topicFallback(c))}</h1>
       <span class="tag ${SCENE[curScene][1]}">${SCENE[curScene][0]}</span>
       <span class="tag info">${stMap[c.status] || c.status || '-'}</span>
       <span style="color:var(--text-3);font-size:13px">${fmtTime(c.created_at)} · ${c.duration_s ? Math.floor(c.duration_s / 60) + ' 分 ' + (c.duration_s % 60) + ' 秒' : '时长未知'} · ${curScene === 'sales' ? '销售' : '归属'} ${esc(c.owner || '-')}${c.customer ? ' · 客户 ' + esc(c.customer.name) : ''}${curScene === 'talk' && c.participants ? ' · 参与者 ' + esc(c.participants) : ''}</span>
@@ -191,7 +191,7 @@ const id = new URLSearchParams(location.search).get('id');
       `<a class="kb-btn" data-domain="${domain}" data-name="${esc(name).slice(0, 60)}" data-content="${esc(content)}" data-scenario="${esc(scenario || '')}" style="margin-left:8px;font-size:12px;color:var(--primary-ink);cursor:pointer;white-space:nowrap">${label || '入库'}</a>`;
     const sinkBar = rp.summary ? `<div class="card" style="margin-bottom:14px;display:flex;align-items:center;gap:10px;padding:12px 18px">
       <span style="font-size:12.5px;color:var(--text-3)">把这条${SCENE_KB_LABEL[scene] || '沟通'}沉淀为团队资产：</span>
-      ${kbBtn('case_library', (c.topic || '沟通#' + c.id) + '（' + fmtTime(c.created_at).slice(0, 10) + '）', rp.summary, SCENE_KB_LABEL[scene] || curScene, '存为案例')}
+      ${kbBtn('case_library', (c.topic || topicFallback(c)), rp.summary, SCENE_KB_LABEL[scene] || curScene, '存为案例')}
       <span style="flex:1"></span><span style="font-size:12px;color:var(--text-3)">入库后 Ask AI 与全员可检索</span></div>` : '';
     // —— 会议纪要（09 册 §4.1）——
     if (scene === 'meeting') {
