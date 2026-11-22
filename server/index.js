@@ -1263,6 +1263,10 @@ async function handleApi(req, res, url) {
     if (me.role === 'sales') throw new HttpError(403, '仅管理者可看台账');
     return sendJson(res, 200, db.prepare('SELECT * FROM devices ORDER BY id DESC LIMIT 500').all());
   }
+  if (pathname === '/api/devices/mine' && method === 'GET') { // 我的设备（登录即可用，移动端首页设备卡）
+    const rows = db.prepare("SELECT id, device_key, model, fw_version, battery, status, last_seen_at FROM devices WHERE owner=? ORDER BY last_seen_at DESC LIMIT 20").all(me.name);
+    return sendJson(res, 200, rows.map(d => ({ ...d, online: d.status === 'online' })));
+  }
   if ((m = pathname.match(/^\/api\/devices\/(\d+)\/bind$/)) && method === 'POST') {
     if (me.role === 'sales') throw new HttpError(403, '仅管理者可绑定');
     const b = await readBody(req);

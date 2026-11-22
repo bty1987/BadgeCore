@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122b">
+<script src="/assets/app.js?v=20261122b"></script>
+<script src="/assets/m-ui.js?v=20261122b"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const shell = await initMShell('me', '我的');
+  if (!shell) return;
+  const { page, me } = shell;
+  const devs = await api('/api/devices/mine').catch(() => []);
+  page.innerHTML = `
+    <div class="m-card"><div class="m-row">
+      <div style="width:42px;height:42px;border-radius:50%;background:var(--primary-light);color:var(--primary-ink);display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;flex:none">${esc((me.name || '?').slice(0, 1))}</div>
+      <div class="m-grow"><b style="font-size:15px">${esc(me.name)}</b>
+        <div style="font-size:12.5px;color:var(--text-3)">角色：${esc(me.role)}</div></div></div></div>
+    <div class="m-card"><b style="font-size:14px">我的工牌</b><div style="margin-top:6px">
+      ${devs.length ? devs.map(d => `<div class="m-row" style="padding:7px 0;border-bottom:1px solid var(--border)">
+        <span class="tag ${d.online ? 'success' : 'off'}" style="flex:none">${d.online ? '在线' : '离线'}</span>
+        <div class="m-grow" style="font-size:13px">${esc(d.device_key)}<span style="color:var(--text-3)"> · 电量 ${esc(d.battery || '?')}%</span></div></div>`).join('')
+      : '<div class="m-empty">暂无绑定设备</div>'}</div></div>
+    <div class="m-card">
+      <a style="display:block;padding:9px 0;color:var(--danger);font-size:14px" href="/api/logout">退出登录</a></div>
+    <div style="text-align:center;color:var(--text-4);font-size:11.5px;padding-bottom:16px">BadgeCore 移动端</div>`;
+})();
+</script>
+</body>
+</html>

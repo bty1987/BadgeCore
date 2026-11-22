@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>沟通 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122b">
+<script src="/assets/app.js?v=20261122b"></script>
+<script src="/assets/m-ui.js?v=20261122b"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const shell = await initMShell('comms', '沟通');
+  if (!shell) return;
+  const { page } = shell;
+  const ST = { recorded: ['已录制', 'off'], transcribed: ['已转写', 'info'], analyzing: ['分析中', 'warn'], analyzed: ['已分析', 'success'], failed: ['失败', 'danger'] };
+  const SC = { sales: '销售', meeting: '会议', training: '培训', talk: '谈话' };
+  page.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="q" placeholder="搜索主题/内容…" style="flex:1;border:1px solid var(--border);border-radius:10px;padding:9px 12px;font-size:14px;background:var(--card)">
+      <button class="btn primary" onclick="window.load()">查询</button></div>
+    <div class="m-chips" id="chips">
+      ${['all', 'analyzed', 'transcribed', 'analyzing', 'failed'].map(k => `<a class="m-chip ${k === 'all' ? 'on' : ''}" data-k="${k}">${{ all: '全部', analyzed: '已分析', transcribed: '已转写', analyzing: '分析中', failed: '失败' }[k]}</a>`).join('')}
+    </div>
+    <div id="list"><div class="m-empty">加载中…</div></div>`;
+  let st = 'all';
+  document.querySelectorAll('#chips .m-chip').forEach(a => a.onclick = () => {
+    st = a.dataset.k;
+    document.querySelectorAll('#chips .m-chip').forEach(x => x.classList.toggle('on', x === a));
+    window.load();
+  });
+  page.querySelector('#q').addEventListener('keydown', e => { if (e.key === 'Enter') window.load(); });
+  window.load = async function () {
+    const q = page.querySelector('#q').value.trim();
+    const rows = await api(`/api/communications?q=${encodeURIComponent(q)}${st !== 'all' ? '&status=' + st : ''}`).catch(() => []);
+    document.getElementById('list').innerHTML = rows.length ? rows.map(r => `
+      <a class="m-card" style="display:block;color:var(--text)" href="/m/comm.html?id=${r.id}">
+        <div class="m-row"><b class="m-grow" style="font-size:14px">${esc(r.topic || topicFallback(r))}</b>
+          <span class="tag ${(ST[r.status] || ST.recorded)[1]}" style="flex:none">${(ST[r.status] || ST.recorded)[0]}</span></div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">
+          <span class="tag info">${SC[r.scene] || r.scene}</span><span>${fmtTime(r.created_at)}</span>
+          <span>${r.duration_s ? Math.floor(r.duration_s / 60) + '′' + r.duration_s % 60 + '″' : '-'}</span>
+          <span>归属 ${esc(r.owner || '-')}</span></div></a>`).join('')
+      : '<div class="m-empty">无沟通记录</div>';
+  };
+  window.load();
+})();
+</script>
+</body>
+</html>

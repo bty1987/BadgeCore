@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>会议 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122b">
+<script src="/assets/app.js?v=20261122b"></script>
+<script src="/assets/m-ui.js?v=20261122b"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const shell = await initMShell('meetings', '会议');
+  if (!shell) return;
+  const { page, me } = shell;
+  page.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="q" placeholder="搜索会议名称/地点…" style="flex:1;border:1px solid var(--border);border-radius:10px;padding:9px 12px;font-size:14px;background:var(--card)">
+      <button class="btn primary" onclick="window.load()">查询</button></div>
+    <div id="list"><div class="m-empty">加载中…</div></div>`;
+  page.querySelector('#q').addEventListener('keydown', e => { if (e.key === 'Enter') window.load(); });
+  window.load = async function () {
+    const q = page.querySelector('#q').value.trim();
+    const rows = await api('/api/meetings?q=' + encodeURIComponent(q)).catch(() => []);
+    document.getElementById('list').innerHTML = rows.length ? rows.map(r => `
+      <a class="m-card" style="display:block;color:var(--text)" href="/m/meeting.html?id=${r.id}">
+        <div class="m-row"><b class="m-grow" style="font-size:14px">${esc(r.name)}</b>
+          <span class="tag info" style="flex:none">${r.comm_count || 0} 条沟通</span></div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">
+          <span>${r.meeting_at ? fmtTime(r.meeting_at) : '时间未定'}</span>
+          ${r.location ? `<span>${esc(r.location)}</span>` : ''}
+          <span>组织人 ${esc(r.owner || '公海')}</span></div></a>`).join('')
+      : '<div class="m-empty">无会议——可在管理后台「会议列表」新建</div>';
+  };
+  window.load();
+})();
+</script>
+</body>
+</html>

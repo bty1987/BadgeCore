@@ -393,3 +393,27 @@ ul.plain li::before { content: "·"; position: absolute; left: 2px; color: var(-
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
 .tabs button { border-radius: 999px; }
 .tabs button.active { background: #2B5FD9; color: #fff; border-color: #2B5FD9; }
+
+/* ========== 移动端 H5（public/m/，底部 Tab 壳，同源 badge_token 会话） ========== */
+.m-body { background: var(--bg); }
+.m-topbar { position: sticky; top: 0; z-index: 50; height: 48px; display: flex; align-items: center; gap: 8px;
+  padding: 0 14px; background: var(--card); border-bottom: 1px solid var(--border); }
+.m-topbar .m-title { font-size: 15px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-topbar-side { width: 24px; min-width: 24px; display: inline-flex; align-items: center; }
+.m-topbar-side.m-right { margin-left: auto; justify-content: flex-end; gap: 10px; }
+.m-back, .m-topbar a { color: var(--text); display: inline-flex; align-items: center; }
+.m-page { padding: 12px 12px calc(72px + env(safe-area-inset-bottom)); max-width: 640px; margin: 0 auto; }
+.m-card { background: var(--card); border-radius: 12px; box-shadow: var(--shadow-card); padding: 14px; margin-bottom: 12px; }
+.m-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; background: var(--card);
+  border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
+.m-tabbar .m-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 7px 0 6px; color: var(--text-3); font-size: 12px; }
+.m-tabbar .m-tab.active { color: var(--primary-ink); font-weight: 600; }
+.m-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+.m-chip.on { background: var(--primary-light); border-color: var(--primary-border); color: var(--primary-ink); font-weight: 600; }
+.m-chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.m-empty { text-align: center; color: var(--text-3); font-size: 13px; padding: 28px 0; }
+.m-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.m-grow { flex: 1; min-width: 0; }
+@media (max-width: 640px) { .page-head h1 { font-size: 16px; } }

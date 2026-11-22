@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>首页 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122b">
+<script src="/assets/app.js?v=20261122b"></script>
+<script src="/assets/m-ui.js?v=20261122b"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const shell = await initMShell('home', 'BadgeCore');
+  if (!shell) return;
+  const { page, me } = shell;
+  page.innerHTML = '<div class="m-empty">加载中…</div>';
+  const ST = { online: ['在线', 'success'], offline: ['离线', 'off'], unknown: ['未知', 'off'] };
+  const [devs, todos, plans] = await Promise.all([
+    api('/api/devices/mine').catch(() => []),
+    api('/api/todos?status=open').catch(() => []),
+    api('/api/plans').catch(() => []),
+  ]);
+  const today = new Date().toISOString().slice(0, 10);
+  const duePlans = (Array.isArray(plans) ? plans : []).filter(p => (p.plan_at || '').slice(0, 10) === today && p.status !== 'done');
+  const devCard = devs.length ? devs.map(d => {
+    const st = ST[d.status] || ST.unknown;
+    return `<div class="m-row" style="padding:8px 0;border-bottom:1px solid var(--border)">
+      <span class="tag ${st[1]}" style="flex:none">${st[0]}</span>
+      <div class="m-grow"><b style="font-size:13.5px">${esc(d.device_key)}</b>
+        <div style="font-size:12px;color:var(--text-3)">电量 ${esc(d.battery || '?')}% · 固件 ${esc(d.fw_version || '?')} · 心跳 ${d.last_seen_at ? fmtTime(d.last_seen_at) : '-'}</div></div></div>`;
+  }).join('') : '<div class="m-empty">暂无绑定设备——请联系管理员在设备台账绑定</div>';
+  page.innerHTML = `
+    <div class="m-card"><div style="font-size:13px;color:var(--text-3);margin-bottom:8px">${esc(me.name)}（${esc(me.role)}）</div>
+      <div style="font-size:22px;font-weight:700;color:var(--primary-ink)">${todos.length}</div>
+      <div style="font-size:12.5px;color:var(--text-3)">待办（未完成）</div></div>
+    <div class="m-card"><b style="font-size:14px">我的设备</b><div style="margin-top:6px">${devCard}</div></div>
+    <div class="m-card"><b style="font-size:14px">今日日程</b><div style="margin-top:6px">
+      ${duePlans.length ? duePlans.map(p => `<div class="m-row" style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <span class="tag info" style="flex:none">${esc((p.plan_at || '').slice(11, 16) || '全天')}</span>
+        <div class="m-grow"><b style="font-size:13.5px">${esc(p.title)}</b>${p.customer_name ? `<div style="font-size:12px;color:var(--text-3)">客户：${esc(p.customer_name)}</div>` : ''}</div></div>`).join('')
+      : '<div class="m-empty">今日无日程</div>'}</div></div>
+    <div class="m-card"><b style="font-size:14px">待办</b><div style="margin-top:6px">
+      ${todos.length ? todos.map(t => `<div class="m-row" style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <input type="checkbox" onchange="window._todoToggle(${t.id})" style="flex:none">
+        <div class="m-grow"><b style="font-size:13.5px">${esc(t.what)}</b>
+        ${t.due ? `<div style="font-size:12px;color:${t.due < today ? 'var(--danger)' : 'var(--text-3)'}">到期 ${esc(t.due)}</div>` : ''}</div></div>`).join('')
+      : '<div class="m-empty">暂无待办</div>'}</div></div>`;
+  window._todoToggle = async (id) => {
+    await api(`/api/todos/${id}/toggle`, { method: 'POST' }).catch(() => {});
+    load();
+  };
+  window.load = () => location.reload();
+})();
+</script>
+</body>
+</html>

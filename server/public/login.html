@@ -42,7 +42,8 @@ async function doLogin() {
   const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, password: pass }) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) { document.getElementById('err').textContent = d.error || '登录失败'; return; }
-  location.href = '/index.html';
+  const next = new URLSearchParams(location.search).get('next');
+  location.href = (next && next.startsWith('/') && !next.includes('//')) ? next : '/index.html'; // 移动端 ?next= 回原页（限本站路径防开放重定向）
 }
 </script>
 </body>

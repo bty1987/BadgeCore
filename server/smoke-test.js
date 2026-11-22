@@ -749,8 +749,12 @@ async function runWecomWebhookSuite() {
     check('审计日志有记录', (r.data || []).some(a => a.action === 'login' && a.user === 'admin'));
     check('风险告警入审计（AI-09）', (r.data || []).some(a => a.action === 'risk_alert'));
 
-    // 12. 静态页
-    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/ask.html', '/attendance.html', '/customers.html', '/devices.html', '/notifications.html', '/dashboard.html', '/style.css']) {
+    // 12. 静态页（含移动端 m/ 六页与壳）
+    for (const mp of ['/m/index.html', '/m/comms.html', '/m/comm.html', '/m/meetings.html', '/m/meeting.html', '/m/me.html', '/assets/m-ui.js']) {
+      const rm = await fetch(BASE + mp, { headers: { Cookie: cookie } });
+      check(`静态页 ${mp}`, rm.status === 200);
+    }
+    for (const p of ['/', '/login.html', '/config.html', '/settings.html', '/ask.html', '/attendance.html', '/customers.html', '/meetings.html', '/devices.html', '/notifications.html', '/dashboard.html', '/style.css']) {
       const res = await fetch(BASE + p);
       check(`静态页 ${p}`, res.status === 200);
     }
