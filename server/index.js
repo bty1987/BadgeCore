@@ -288,10 +288,15 @@ function searchCommunications(question, scopeSql, scopeParams, viewer = { role: 
 }
 
 /** Ask AI 核心（AI-08）：权限内检索 → LLM/Mock 回答（/api/ask 与 AI-11 定时任务复用） */
-async function answerQuestion(role, name, question) {
-  // sales 范围并入 talk 参与者可见性（INT-40：被谈话人可检索自己的谈话记录）
-  const scopeSql = role === 'sales' ? "WHERE owner=? OR (scene='talk' AND (owner=? OR participants LIKE ?))" : '';
-  const scopeParams = role === 'sales' ? [name, name, `%${name}%`] : [];
+async function answerQuestion(role, name, question, opts = {}) {
+  // 检索范围随提问者数据范围——visibleOwners 通用化（原仅 sales 注入范围，manager 在 view_scope=dept/self 下可检索全企业）；
+  // owners=null（all）不注入；talk 参与者可见性并入（INT-40：被谈话人可检索自己的谈话记录）
+  const owners = visibleOwners({ role, name });
+  let scopeSql = owners ? `WHERE owner IN (${owners.map(() => '?').join(',')}) OR (scene='talk' AND (owner=? OR participants LIKE ?))` : '';
+  let scopeParams = owners ? [...owners, name, `%${name}%`] : [];
+  if (opts.excludeTalk) { // 定时报告经管理员视角群发/站内信出后台——整类排除谈话记录（talk 红线，含参与者可见性也不放行）
+    scopeSql = (scopeSql || 'WHERE') + (scopeSql ? " AND scene <> 'talk'" : " scene <> 'talk'");
+  }
   const comms = searchCommunications(String(question), scopeSql, scopeParams, { role, name });
   const kbs = db.prepare("SELECT name, data FROM config_items WHERE domain='knowledge_base' AND enabled=1 ORDER BY sort,id").all()
     .map(r => ({ name: r.name, ...JSON.parse(r.data || '{}') }));
@@ -331,7 +336,12 @@ async function prepVisitPlan(role, name, customer, notes) {
   const { answer } = await answerQuestion(role, name, `${customer} ${notes || ''}`); // 复用检索作上下文来源
   const llm = getSetting(db, 'llm');
   const kbs = db.prepare("SELECT name FROM config_items WHERE domain='knowledge_base' AND enabled=1").all();
-  const comms = searchCommunications(customer, role === 'sales' ? 'WHERE owner=?' : '', role === 'sales' ? [name] : [], { role, name });
+  const comms = (() => { // 访前准备检索同款按数据范围收敛（原仅 sales 有范围）
+    const owners = visibleOwners({ role, name });
+    if (!owners) return searchCommunications(customer, '', [], { role, name });
+    const ph = owners.map(() => '?').join(',');
+    return searchCommunications(customer, `WHERE owner IN (${ph})`, owners, { role, name });
+  })();
   if (!llm || llm.provider === 'mock') {
     return {
       customer: customer || '(未填)',
@@ -538,14 +548,20 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, analyzed });
   }
 
+  // 页面登出（公开：未登录点登出也优雅回登录页，清不存在的会话无副作用；GET 为页面登出——侧栏按钮 location.href 走 GET，仅实现 POST 会 404）
+  if (pathname === '/api/logout' && (method === 'POST' || method === 'GET')) {
+    sessions.delete(parseCookies(req).badge_token);
+    const clear = 'badge_token=; Path=/; Max-Age=0';
+    if (method === 'POST') return sendJson(res, 200, { ok: true }, clear);
+    res.writeHead(302, { Location: '/login.html', 'Set-Cookie': clear });
+    res.end();
+    return;
+  }
+
   // 以下端点需登录
   const me = currentUser(req);
   if (!me) throw new HttpError(401, '未登录');
 
-  if (pathname === '/api/logout' && method === 'POST') {
-    sessions.delete(parseCookies(req).badge_token);
-    return sendJson(res, 200, { ok: true }, 'badge_token=; Path=/; Max-Age=0');
-  }
   if (pathname === '/api/me') return sendJson(res, 200, { name: me.name, role: me.role });
 
   // 沟通记录（数据范围受全局配置 view_scope 影响，ADM-202/313）
@@ -710,6 +726,12 @@ async function handleApi(req, res, url) {
     throw new HttpError(405, '方法不支持');
   }
   if ((m = pathname.match(/^\/api\/communications\/(\d+)\/analyze$/)) && method === 'POST') {
+    const row0 = db.prepare('SELECT * FROM communications WHERE id=?').get(Number(m[1]));
+    if (!row0) throw new HttpError(404, '沟通记录不存在');
+    const ownersAn = visibleOwners(me); // 数据范围校验（与导出端点同款，避免越权重析；talk 参与者收紧 INT-40）
+    if (row0.scene === 'talk' ? !canSeeComm(me, row0) : (ownersAn && !ownersAn.includes(row0.owner))) {
+      throw new HttpError(403, '无权操作该记录');
+    }
     const report = await runAnalysis(Number(m[1]), me.name);
     return sendJson(res, 200, { ok: true, report });
   }
@@ -718,7 +740,11 @@ async function handleApi(req, res, url) {
     const id = Number(m[1]);
     const row = db.prepare('SELECT * FROM communications WHERE id=?').get(id);
     if (!row) throw new HttpError(404, '沟通记录不存在');
-    if (!canSeeComm(me, row)) throw new HttpError(403, '无权操作该记录');
+    // 数据范围校验（与导出端点同款）——canSeeComm 对非 talk 记录恒真，仅靠它会让任意账号改标他人记录并自我授予 talk 可见性
+    const ownersSc = visibleOwners(me);
+    if (row.scene === 'talk' ? !canSeeComm(me, row) : (ownersSc && !ownersSc.includes(row.owner))) {
+      throw new HttpError(403, '无权操作该记录');
+    }
     const b = await readBody(req);
     if (!SCENES.includes(b.scene)) throw new HttpError(400, `scene 须为：${SCENES.join('/')}`);
     const meta = JSON.parse(row.meta || '{}');
@@ -1023,7 +1049,7 @@ async function handleApi(req, res, url) {
       if (!b.title) throw new HttpError(400, '需要标题');
       const r = db.prepare('INSERT INTO plans(title, customer_id, owner, plan_at, flow, info_fields, created_at) VALUES(?,?,?,?,?,?,?)')
         .run(String(b.title), b.customer_id ? Number(b.customer_id) : null,
-          String(b.owner || me.name), b.plan_at || '', String(b.flow || ''),  // owner 缺省=创建者（日程提醒需要负责人）
+          me.role === 'sales' ? me.name : String(b.owner || me.name), b.plan_at || '', String(b.flow || ''),  // owner 缺省=创建者（日程提醒需要负责人）；sales 不可伪造 owner
           JSON.stringify(b.info_fields || {}), new Date().toISOString());
       audit(db, me.name, 'plan_create', `plan#${r.lastInsertRowid}`, b.title);
       return sendJson(res, 200, { id: Number(r.lastInsertRowid) });
@@ -1031,6 +1057,9 @@ async function handleApi(req, res, url) {
   }
   if ((m = pathname.match(/^\/api\/plans\/(\d+)(\/complete)?$/))) {
     const id = Number(m[1]);
+    const rowPlan = db.prepare('SELECT owner FROM plans WHERE id=?').get(id);
+    if (!rowPlan) throw new HttpError(404, '计划不存在');
+    if (rowPlan.owner !== me.name && me.role !== 'admin') throw new HttpError(403, '只能操作本人计划'); // 属主校验（与待办同款），避免 IDOR 完结/删除他人计划
     if (m[2] && method === 'POST') { // 标记完成（沟通结束后）
       db.prepare('UPDATE plans SET status=? WHERE id=?').run('done', id);
       audit(db, me.name, 'plan_done', `plan#${id}`);
@@ -1236,7 +1265,7 @@ async function handleApi(req, res, url) {
 }
 
 // ---------- 静态文件 ----------
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.txt': 'text/plain; charset=utf-8' };
 function serveStatic(req, res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -1405,7 +1434,7 @@ async function pushMeetingMinutes(commId, row, r) {
 // AI-11 定时报告：执行一个定时任务项（Ask AI 管理员视角检索 → 站内信投递 + 企微双投 W1 hook①）
 async function fireScheduledItem(item, manual = false) {
   const d = JSON.parse(item.data || '{}');
-  const { answer } = await answerQuestion('admin', 'scheduler', d.question || item.name);
+  const { answer } = await answerQuestion('admin', 'scheduler', d.question || item.name, { excludeTalk: true }); // 谈话记录不出后台（talk 红线）
   const recipients = (d.recipients && d.recipients.length) ? d.recipients : ['admin'];
   const title = `[${item.name}] ${d.time || ''}`;
   const body = answer + '\n\n（以上内容由 AI 生成，仅供参考）';

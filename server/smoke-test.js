@@ -281,6 +281,9 @@ async function runWecomWebhookSuite() {
     check('LLM 连通测试（mock）', r.data?.ok === true);
 
     // 8. 用户与数据范围
+    r = await api('POST', '/api/plans', { title: 'admin 冒烟计划' });
+    check('新增管理计划', r.status === 200);
+    const planAdminId = r.data?.id;
     r = await api('POST', '/api/users', { name: 'sales01', password: 's123456', role: 'sales' });
     check('新增销售用户', r.status === 200);
     const savedCookie = cookie;
@@ -298,12 +301,28 @@ async function runWecomWebhookSuite() {
     check('M4 数据范围：sales 看不到他人待办', r.status === 200 && r.data?.length === 0);
     r = await api('POST', '/api/kb-entry', { comm_id: ingestData.id, domain: 'knowledge_base', name: '越权', content: '越权内容' });
     check('M4 数据范围：sales 他人沟通不可入库 403', r.status === 403);
+    r = await api('POST', `/api/communications/${ingestData.id}/analyze`);
+    check('数据范围：sales 他人记录重析 403', r.status === 403);
+    r = await api('POST', `/api/communications/${ingestData.id}/scene`, { scene: 'talk', participants: 'sales01' });
+    check('数据范围：sales 他人记录改标 403（防自我授予 talk 可见性）', r.status === 403);
+    r = await api('POST', `/api/plans/${planAdminId}/complete`);
+    check('数据范围：sales 完结他人计划 403', r.status === 403);
+    r = await api('DELETE', `/api/plans/${planAdminId}`);
+    check('数据范围：sales 删除他人计划 403', r.status === 403);
+    r = await api('POST', '/api/plans', { title: 'sales01 伪造 owner 尝试', owner: 'admin' });
+    check('sales 建计划可提交', r.status === 200);
+    r = await api('GET', '/api/plans');
+    check('sales 不可伪造 owner（强制本人）', (r.data || []).some(p => p.title === 'sales01 伪造 owner 尝试' && p.owner === 'sales01'));
     const ownIngest = await (await fetch(BASE + '/api/ingest', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
       body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 3, device: 'sim-device', owner: 'sales01', topic: 'sales01 自己的沟通', transcript: '说话人1: 我总结一条经验：先听需求再谈方案。' }),
     })).json();
     r = await api('POST', '/api/kb-entry', { comm_id: ownIngest.id, domain: 'knowledge_base', name: '销售经验', content: '先听需求再谈方案。' });
     check('M4 sales 本人沟通可入库（贡献正路）', r.status === 200 && r.data?.id > 0);
+    r = await api('POST', `/api/communications/${ownIngest.id}/analyze`);
+    check('sales 本人记录可重析（正路）', r.status === 200 && r.data?.ok === true);
+    const lr = await fetch(BASE + '/api/logout', { headers: { Cookie: cookie }, redirect: 'manual' });
+    check('GET /api/logout 页面登出 302 回登录页（未登录点登出同样优雅）', lr.status === 302 && (lr.headers.get('location') || '').includes('/login.html'));
     cookie = savedCookie;
 
     // 9. Ask AI（AI-08 简版 RAG）
