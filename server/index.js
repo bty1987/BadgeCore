@@ -29,6 +29,7 @@ const { judgeAttendance, periodsToDaily } = require('./attendance');
 const { redactText } = require('./redact');
 const { runRetentionPurge, loadRetention, MIN: RETENTION_MIN } = require('./retention');
 const { backupNow } = require('./backup');
+const partner = require('./partner');
 const wecom = require('./wecom');
 
 const PORT = Number(process.env.PORT || 8200);
@@ -584,6 +585,15 @@ async function handleApi(req, res, url) {
 
   // 设备心跳（receiver 转发设备 OTA 检查附带的状态；令牌鉴权）：注册/上线设备台账，
   // 刷新版本/电量/IP/最后在线。5 分钟一次，设备台账页据此判断存活与续航。
+  // 三方成品工牌推送接入（L3 协议面，D24）：验签自鉴权（v1 明文须 allow_plain / v2 md5 签名 / v3 签名+AES-CBC）
+  if (pathname === '/api/partner/push' && method === 'POST') {
+    const r = await partner.handlePush({
+      req, db,
+      runAnalysis: (id, actor) => runAnalysis(id, actor),
+    });
+    return sendJson(res, r.status, r.body);
+  }
+
   if (pathname === '/api/device-heartbeat' && method === 'POST') {
     const expect = getSetting(db, 'ingest_token');
     if (!expect || req.headers['x-ingest-token'] !== expect) throw new HttpError(401, '入库令牌无效');

@@ -362,6 +362,61 @@ async function runWecomWebhookSuite() {
     check('常驻越权目标会议', r.status === 200 && r.data?.id > 0);
     const mtKeepId = r.data.id;
 
+    // 7.8 三方工牌推送接入（L3 协议面）：验签三版正负例 + 幂等回填 + 设备 upsert
+    const cryptoM = require('crypto');
+    const md5s = (x) => cryptoM.createHash('md5').update(x, 'utf8').digest('hex');
+    const P_SECRET = 'sek1234567890abc'; // 16 字节（v3 AES-128）
+    const P_DEV = '861234051234567';
+    r = await api('POST', '/api/partner/push', { dataType: 'HeartbeatLog', deviceNo: P_DEV, data: {} });
+    check('三方推送未配置 503', r.status === 503);
+    const { setSetting: _setS } = require('./db');
+    const { openDb: _odbP } = require('./db');
+    const _dbp = _odbP(dbFile); _setS(_dbp, 'partner', { app_id: 'demo-app', app_secret: P_SECRET }); _dbp.close();
+    const ppush = async (body, headers = {}, isRaw = false) => {
+      const res = await fetch(BASE + '/api/partner/push', {
+        method: 'POST',
+        headers: { 'Content-Type': isRaw ? 'text/plain' : 'application/json', ...headers },
+        body: isRaw ? body : JSON.stringify(body),
+      });
+      let d = null; try { d = await res.json(); } catch {}
+      return { status: res.status, data: d };
+    };
+    const v2hdr = () => {
+      const ts = String(Date.now()); const rid = 'smoke-' + Date.now();
+      return { 'Api-Version': 'v2', 'App-Id': 'demo-app', 'Request-Id': rid, Timestamp: ts, Sign: md5s(ts + rid + 'demo-app' + P_SECRET) };
+    };
+    r = await ppush({ dataType: 'HeartbeatLog', deviceNo: P_DEV, data: {} }); // v1 明文未放行
+    check('三方推送 v1 明文未放行 403', r.status === 403);
+    r = await ppush({ dataType: 'AudioText', deviceNo: P_DEV, data: {} }, { 'Api-Version': 'v2', 'App-Id': 'demo-app', 'Request-Id': 'x', Timestamp: String(Date.now()), Sign: 'bad' });
+    check('三方推送 v2 验签失败 401', r.status === 401);
+    const env1 = { dataType: 'AudioText', timeStamp: Date.now(), deviceNo: P_DEV,
+      data: { filename: 'smoke-partner-01.mp3', duration: 42000,
+        segments: [ { startTimeStr: '00:00', speakerId: 0, text: '客户手机号 13900001111，确认下周三上门量房', dateStart: new Date().toISOString(), endMillisecond: 42000 } ] } };
+    r = await ppush(env1, v2hdr());
+    check('三方推送 v2 转写正路（新建+自动分析接线）', r.status === 200 && r.data?.created === true && r.data?.id > 0);
+    const pCommId = r.data.id;
+    r = await api('GET', `/api/communications/${pCommId}`);
+    check('三方转写入库已脱敏（手机号掩码）', r.data?.transcript?.includes('139****1111') && !r.data.transcript.includes('13900001111'));
+    env1.data.segments[0].text = '客户确认下周三上门量房，预算充足';
+    r = await ppush(env1, v2hdr());
+    check('三方转写幂等回填（同文件名 created=false）', r.status === 200 && r.data?.created === false && r.data?.id === pCommId);
+    r = await ppush({ dataType: 'HeartbeatLog', timeStamp: Date.now(), deviceNo: P_DEV,
+      data: { battery: '88', version: 'v0.4', deviceType: 'PartnerBadge' } }, v2hdr());
+    check('三方心跳推送 200', r.status === 200);
+    r = await api('GET', '/api/devices');
+    const pDev = (r.data || []).find(d => d.device_key === P_DEV);
+    check('三方设备幂等 upsert（online/电量/型号）', !!pDev && pDev.status === 'online' && pDev.battery === '88' && pDev.model === 'PartnerBadge');
+    // v3 AES-CBC：key=secret，iv=key 前 16 字节，密文=16 字节头+AES
+    const cipher = cryptoM.createCipheriv('aes-128-cbc', Buffer.from(P_SECRET, 'utf8'), Buffer.from(P_SECRET, 'utf8').subarray(0, 16));
+    const v3Payload = JSON.stringify({ dataType: 'AudioText', timeStamp: Date.now(), deviceNo: P_DEV,
+      data: { filename: 'smoke-partner-v3.mp3', segments: [ { startTimeStr: '00:01', speakerId: 1, text: 'v3 加密通道转写验证', dateStart: new Date().toISOString(), endMillisecond: 30000 } ] } });
+    const encBody = Buffer.concat([Buffer.alloc(16, 0), cipher.update(Buffer.from(v3Payload, 'utf8')), cipher.final()]).toString('base64');
+    const v3hdr = () => { const h = v2hdr(); h['Api-Version'] = 'v3'; return h; };
+    r = await ppush(encBody, v3hdr(), true);
+    check('三方推送 v3 AES 加密正路', r.status === 200 && r.data?.created === true);
+    const { setSetting } = require('./db');
+    const _dbp2 = require('./db').openDb(dbFile); setSetting(_dbp2, 'partner', { enabled: false }); _dbp2.close(); // 收尾关闭通道
+
     // 8. 用户与数据范围
     r = await api('POST', '/api/plans', { title: 'admin 冒烟计划' });
     check('新增管理计划', r.status === 200);
