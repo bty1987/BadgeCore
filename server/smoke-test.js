@@ -280,6 +280,44 @@ async function runWecomWebhookSuite() {
     r = await api('POST', '/api/llm-test');
     check('LLM 连通测试（mock）', r.data?.ok === true);
 
+    // 7.5 可靠性三件：空转写防浪费 / analyzing 卡死救援 / 每日备份 / 设备离线判定
+    const noTrans = await (await fetch(BASE + '/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': token },
+      body: JSON.stringify({ created_at: new Date().toISOString(), duration_s: 2, device: 'sim-device', owner: '张三', topic: '无转写记录' }),
+    })).json();
+    r = await api('POST', `/api/communications/${noTrans.id}/analyze`);
+    check('空转写重析 400（防 LLM 空跑）', r.status === 400 && /转写完成/.test(r.data?.error || ''));
+    r = await api('POST', `/api/communications/${noTrans.id}/scene`, { scene: 'meeting' });
+    check('无转写改标跳过重析（只改标）', r.status === 200 && r.data?.skipped_analysis === true && r.data?.report === null);
+    r = await api('POST', '/api/admin/rescue-analyzing');
+    check('rescue 端点 admin 200（无卡死 rescued=0）', r.status === 200 && r.data?.rescued === 0);
+    const { openDb } = require('./db');
+    const _dbx = openDb(dbFile); // 直接改库模拟「服务重启打断分析」（重启后 status 卡 analyzing，无人捡起）
+    _dbx.prepare("UPDATE communications SET status='analyzing' WHERE id=?").run(ingestData.id);
+    _dbx.close();
+    r = await api('POST', '/api/admin/rescue-analyzing');
+    check('analyzing 卡死救援重跑成功', r.status === 200 && r.data?.rescued === 1 && r.data?.after === 0);
+    r = await api('GET', `/api/communications/${ingestData.id}`);
+    check('被救援记录状态已恢复 analyzed', r.data?.status === 'analyzed');
+    r = await api('POST', '/api/admin/backup');
+    check('手动备份端点（VACUUM INTO 快照）', r.status === 200 && r.data?.size > 0);
+    const devList0 = await api('GET', '/api/devices');
+    const simDev = (devList0.data || []).find(d => String(d.device_key).includes('sim-device'));
+    check('设备台账含 sim-device', !!simDev);
+    r = await api('POST', `/api/devices/${simDev.id}/bind`, { owner: 'admin' });
+    check('绑定设备 owner=admin', r.status === 200);
+    const _dby = openDb(dbFile); // 直接改库模拟心跳停更 25h
+    _dby.prepare("UPDATE devices SET last_seen_at=? WHERE id=?").run(new Date(Date.now() - 25 * 3600e3).toISOString(), simDev.id);
+    _dby.close();
+    r = await api('POST', '/api/admin/device-offline-check');
+    check('离线判定端点检出超时设备', r.status === 200 && r.data?.offline >= 1);
+    r = await api('GET', '/api/devices');
+    check('超时设备已置 offline', (r.data || []).some(d => d.id === simDev.id && d.status === 'offline'));
+    r = await api('GET', '/api/notifications');
+    check('离线通知发给绑定人（状态翻转防抖）', (r.data?.rows || []).some(n => String(n.title).includes('设备离线')));
+    r = await api('POST', '/api/admin/device-offline-check');
+    check('离线判定幂等（已 offline 不重复通知）', r.status === 200 && r.data?.offline === 0);
+
     // 8. 用户与数据范围
     r = await api('POST', '/api/plans', { title: 'admin 冒烟计划' });
     check('新增管理计划', r.status === 200);

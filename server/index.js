@@ -28,6 +28,7 @@ const { analyzeCommunication } = require('./analysis');
 const { judgeAttendance, periodsToDaily } = require('./attendance');
 const { redactText } = require('./redact');
 const { runRetentionPurge, loadRetention, MIN: RETENTION_MIN } = require('./retention');
+const { backupNow } = require('./backup');
 const wecom = require('./wecom');
 
 const PORT = Number(process.env.PORT || 8200);
@@ -385,7 +386,14 @@ function canSeeComm(me, row) {
   return parts.includes(me.name) || (row.owner && row.owner === me.name);
 }
 
+const analyzingNow = new Set(); // 进程内正在分析的 commId（重启清空=中断的分析由救援重跑）
 async function runAnalysis(commId, actor) {
+  analyzingNow.add(Number(commId));
+  try { return await runAnalysisInner(commId, actor); }
+  finally { analyzingNow.delete(Number(commId)); }
+}
+
+async function runAnalysisInner(commId, actor) {
   const row = db.prepare('SELECT * FROM communications WHERE id=?').get(commId);
   if (!row) throw new HttpError(404, '沟通记录不存在');
   const llm = getSetting(db, 'llm');
@@ -402,6 +410,40 @@ async function runAnalysis(commId, actor) {
     db.prepare('UPDATE communications SET status=? WHERE id=?').run('failed', commId);
     throw e;
   }
+}
+
+/** analyzing 卡死救援：服务重启会打断进行中的分析（status 永久卡 analyzing——转写队列只捞无转写记录，有转写的无人捡起）。
+    启动即跑 + 每 10 分钟兜底一轮：analyzing 且有转写的记录直接重跑分析（幂等，进程内 Set 已排除正在跑的）。 */
+async function rescueAnalyzing() {
+  const rows = db.prepare("SELECT id FROM communications WHERE status='analyzing' AND transcript IS NOT NULL AND transcript != ''").all()
+    .filter(r => !analyzingNow.has(Number(r.id)));
+  for (const r of rows) {
+    try { await runAnalysis(r.id, 'system'); console.log(`[救援] comm#${r.id} 分析恢复`); }
+    catch (e) { console.error(`[救援] comm#${r.id} 失败:`, e.message); }
+  }
+  if (rows.length) console.log('[救援] analyzing 卡死扫描完成');
+  return rows.length;
+}
+
+/** 设备离线判定：last_seen_at 超阈值仍标 online → 置 offline + 通知绑定人。
+    状态翻转才通知（offline 后不再重复），天然防抖；心跳正常间隔 5 分钟，阈值默认 24h。 */
+function checkDeviceOffline(minutes = 24 * 60) {
+  const cutoff = new Date(Date.now() - minutes * 60_000).toISOString();
+  const rows = db.prepare("SELECT * FROM devices WHERE status='online' AND last_seen_at IS NOT NULL AND last_seen_at < ?").all(cutoff);
+  let n = 0;
+  for (const d of rows) {
+    db.prepare("UPDATE devices SET status='offline' WHERE id=?").run(d.id);
+    if (d.owner) {
+      db.prepare('INSERT INTO notifications(user, title, body, created_at) VALUES(?,?,?,?)')
+        .run(d.owner, `设备离线：${d.device_key}`,
+          `设备超过 ${Math.round(minutes / 60)} 小时未心跳（最后在线 ${d.last_seen_at}），已标记离线。如为长期停用设备请在设备台账解绑。`,
+          new Date().toISOString());
+    }
+    audit(db, 'system', 'device_offline', d.device_key, `last_seen=${d.last_seen_at}`);
+    n++;
+  }
+  if (n) console.log(`[设备离线] ${n} 台超时设备已置 offline`);
+  return n;
 }
 
 class HttpError extends Error {
@@ -732,6 +774,7 @@ async function handleApi(req, res, url) {
     if (row0.scene === 'talk' ? !canSeeComm(me, row0) : (ownersAn && !ownersAn.includes(row0.owner))) {
       throw new HttpError(403, '无权操作该记录');
     }
+    if (!row0.transcript) throw new HttpError(400, '转写完成后才能分析（录音已保存，等转写队列处理即可）'); // 空转写防浪费：不空跑 LLM 调用
     const report = await runAnalysis(Number(m[1]), me.name);
     return sendJson(res, 200, { ok: true, report });
   }
@@ -757,8 +800,8 @@ async function handleApi(req, res, url) {
     db.prepare('UPDATE communications SET scene=?, participants=?, meta=? WHERE id=?')
       .run(b.scene, finalParticipants, JSON.stringify(meta), id);
     audit(db, me.name, 'scene_change', `comm#${id}`, `${row.scene} → ${b.scene}`);
-    const report = await runAnalysis(id, me.name);
-    return sendJson(res, 200, { ok: true, report, history_count: meta.history.length });
+    const report = row.transcript ? await runAnalysis(id, me.name) : null; // 无转写只改标不重析（空跑浪费 LLM 调用且必 failed）
+    return sendJson(res, 200, { ok: true, report, history_count: meta.history.length, skipped_analysis: !row.transcript });
   }
 
   // 导出（CMP-13：水印=访问者+时间，写审计）
@@ -1070,6 +1113,31 @@ async function handleApi(req, res, url) {
       audit(db, me.name, 'plan_delete', `plan#${id}`);
       return sendJson(res, 200, { ok: true });
     }
+  }
+
+  // analyzing 卡死救援手动触发（admin）：与 10 分钟兜底轮同一逻辑，即时生效
+  if (pathname === '/api/admin/rescue-analyzing' && method === 'POST') {
+    if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
+    const whereRescue = "status='analyzing' AND transcript IS NOT NULL AND transcript != ''";
+    const before = db.prepare(`SELECT COUNT(*) c FROM communications WHERE ${whereRescue}`).get().c;
+    const rescued = await rescueAnalyzing();
+    const after = db.prepare(`SELECT COUNT(*) c FROM communications WHERE ${whereRescue}`).get().c;
+    audit(db, me.name, 'rescue_analyzing', '', `rescued=${rescued} before=${before} after=${after}`);
+    return sendJson(res, 200, { ok: true, rescued, before, after });
+  }
+  // 设备离线判定手动触发（admin）：last_seen_at 超时仍 online → offline + 通知绑定人（启动/每小时也自动跑）
+  if (pathname === '/api/admin/device-offline-check' && method === 'POST') {
+    if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
+    const n = checkDeviceOffline();
+    audit(db, me.name, 'device_offline_check', '', `offline=${n}`);
+    return sendJson(res, 200, { ok: true, offline: n });
+  }
+  // 生产库手动备份（admin）：VACUUM INTO 一致性快照（每日 03:20 也自动跑）
+  if (pathname === '/api/admin/backup' && method === 'POST') {
+    if (me.role !== 'admin') throw new HttpError(403, '仅管理员');
+    const r = backupNow(DB_FILE);
+    audit(db, me.name, 'db_backup', '', `${path.basename(r.file)} ${r.size}B`);
+    return sendJson(res, 200, { ok: true, file: path.basename(r.file), size: r.size });
   }
 
   // 设备管理（04 册：台账/绑定/操作日志；固件升级缓期 D16——receiver OTA 即开发期通道）
@@ -1454,6 +1522,11 @@ function startScheduler() {
       const now = new Date();
       const today = now.toISOString().slice(0, 10);
       const currentMin = now.getHours() * 60 + now.getMinutes();
+      // 每日 03:20 生产库备份（VACUUM INTO 快照，保留 30 份滚动；backup_last 防当日重复）
+      if (currentMin >= 3 * 60 + 20 && String(getSetting(db, 'backup_last') || '').slice(0, 10) !== today) {
+        try { backupNow(DB_FILE); setSetting(db, 'backup_last', new Date().toISOString()); }
+        catch (e) { console.error('[调度器] 备份失败:', e.message); }
+      }
       for (const item of db.prepare("SELECT * FROM config_items WHERE domain='scheduled_reports' AND enabled=1").all()) {
         const d = JSON.parse(item.data || '{}');
         if (!d.time) continue;
@@ -1488,6 +1561,10 @@ try {
 setInterval(() => { try { checkOverdueTodos(); } catch (e) { console.error('[待办到期]', e.message); } }, 3600 * 1000).unref();
 try { const rn = checkPlanReminders(); if (rn) console.log(`[日程提醒] ${rn} 条`); } catch (e) { console.error('[日程提醒]', e.message); }
 setInterval(() => { try { checkPlanReminders(); } catch (e) { console.error('[日程提醒]', e.message); } }, 3600 * 1000).unref();
+rescueAnalyzing().catch(e => console.error('[救援-启动]', e.message)); // 启动即扫一轮（重启打断的分析立即恢复）
+setInterval(() => { rescueAnalyzing().catch(e => console.error('[救援]', e.message)); }, 10 * 60_000).unref(); // analyzing 卡死救援兜底
+try { checkDeviceOffline(); } catch (e) { console.error('[设备离线]', e.message); } // 启动即判一轮
+setInterval(() => { try { checkDeviceOffline(); } catch (e) { console.error('[设备离线]', e.message); } }, 3600 * 1000).unref();
 startScheduler();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
