@@ -398,11 +398,11 @@ function buildAutoTopic(row, report) {
   const who = cust ? '· ' + cust : '';
   const summary = String((report && report.summary) || '').trim();
   if (summary) {
-    const first = summary.split(/[。；;\n]/)[0].trim();
+    const first = summary.split(/[。；;\n]/)[0].trim().replace(/^【Mock】\s*/, ''); // Mock 标记是引擎元信息，不进业务主题
     if (first) return `${sceneTxt}${who}：${first.slice(0, 30)}${first.length > 30 ? '…' : ''}`;
   }
   const kf = (report && report.key_facts || [])[0];
-  if (kf && kf.k) return `${sceneTxt}${who}：${String(kf.k).slice(0, 24)}`;
+  if (kf && kf.k) return `${sceneTxt}${who}：${String(kf.k).replace(/^【Mock】\s*/, '').slice(0, 24)}`;
   return `${sceneTxt}${who}（${String(row.created_at || '').slice(5, 10)}）`;
 }
 

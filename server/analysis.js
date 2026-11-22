@@ -205,7 +205,8 @@ function mockLLM(messages, scene = 'sales') {
   const cfg = JSON.parse((user.match(/【企业配置】\n([\s\S]*?)\n\n【转写文本】/) || [])[1] || '{}');
   const report = reportSkeleton('sales');
   report.summary = `【Mock】${plain.slice(0, 80)}（转写共 ${transcript.length} 字）`;
-  report.key_facts = [{ k: 'mock', v: true }];
+  // key_facts 用真实转写片段演示（业务字段不塞引擎元信息——曾产出 {k:'mock',v:true} 垃圾条目上屏）
+  report.key_facts = plain.length > 20 ? [{ k: '沟通要点', v: plain.slice(0, 40) + (plain.length > 40 ? '…' : '') }] : [];
   report.tasks = (cfg.task_items || []).map(item => ({
     item, status: transcript.includes(item.slice(0, 2)) ? '完成' : '未提及', evidence: '【Mock 证据】',
   }));

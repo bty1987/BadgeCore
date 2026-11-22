@@ -14,7 +14,7 @@ _身份 · 考勤 · 门禁 · 通知 · 录音 · 实时转写 · AI 报告_
 ![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.5%20Zero%20Dep-339933)
 ![ASR](https://img.shields.io/badge/ASR-Xunfei%20Dual%20Pipe-1C6BBA)
 ![LLM](https://img.shields.io/badge/LLM-DeepSeek%20%2F%20Mock-4B8BBE)
-![Tests](https://img.shields.io/badge/Smoke%20Tests-154%2F154-brightgreen)
+![Tests](https://img.shields.io/badge/Smoke%20Tests-216%2F216-brightgreen)
 
 </div>
 
@@ -53,6 +53,18 @@ BadgeCore 是一套**跑在自己内网**的员工数字工牌系统：对全员
 
 > 界面为 v3「淡蓝底分区」设计体系（2026-10-23 改版）：泛品牌蓝底 + 白卡 + 激活态三重编码；改版选型过程与三方向原型见 [design-demos/](design-demos/)。
 
+### 移动端 H5（`/m/index.html`，2026-11-22）
+
+底部 Tab 四页壳（首页/沟通/会议/我的），`badge_token` 同源会话无需独立登录页；截图为 390×844 移动视口实拍（演示数据，AI 报告为 Mock 模式输出）。
+
+| 首页 · 待办日程设备卡 | 沟通列表 · 状态筛选 | 沟通详情 · AI 报告 |
+|---|---|---|
+| ![移动端首页](design-demos/live/m-home.png) | ![移动端沟通列表](design-demos/live/m-comms.png) | ![移动端沟通详情](design-demos/live/m-comm.png) |
+
+| 会议列表 · 沟通归属 | 我的 · 工牌状态 |
+|---|---|
+| ![移动端会议](design-demos/live/m-meetings.png) | ![移动端我的](design-demos/live/m-me.png) |
+
 ## 能力全景
 
 ![BadgeCore 能力全景](docs/images/capability-map.png)
@@ -76,7 +88,7 @@ BadgeCore 是一套**跑在自己内网**的员工数字工牌系统：对全员
 | 📱 移动端 H5 | m/ 六页（首页待办日程/沟通列表详情/会议/我的），badge_token 同源会话，底部 Tab 壳 | ✅ 新增 |
 | 🔌 硬件三层路线 | L1 全自研（画板/PCB，终局）· L2 开源硬件（ESP32-S3 生态开发板）· L3 二开接入（成品工牌 + 开源固件补丁接自建服务端，**当前主力**，D24） | L3 ✅ 在产 / L2 ✅ 在用 / L1 ⏳ 终局 |
 
-> 冒烟测试 154/154（`server/smoke-test.js`，自包含临时库）。
+> 冒烟测试 216/216（`server/smoke-test.js`，自包含临时库；覆盖鉴权/入库/报告/九域 CRUD/企微推送/三方推送验签/移动端静态页）。
 
 ## 与市面「销售录音工牌」的区别
 
@@ -105,7 +117,8 @@ BadgeCore 是一套**跑在自己内网**的员工数字工牌系统：对全员
 | ASR | 讯飞实时听写 + 录音转写大模型（说话人分离）；本地 faster-whisper 备选 | 双云管道实测通过 |
 | LLM | OpenAI 兼容接口（DeepSeek 实测）+ Mock 模式 | 报告分析/Ask AI/智能体 |
 | 推送 | 站内信 · 企微群机器人 webhook | 定时报告 + 会议纪要双投 |
-| 质量 | 冒烟测试 154 项（自包含临时库） | `cd server && node smoke-test.js` |
+| 移动端 | 零依赖 H5 壳（m-ui.js） | 底部 Tab + 底部表单抽屉；badge_token 同源会话，`/m/index.html` 直达 |
+| 质量 | 冒烟测试 216 项（自包含临时库） | `cd server && node smoke-test.js` |
 
 ## 快速开始（开发/演示）
 
@@ -131,6 +144,8 @@ node asr-xf-transcribe.js sessions/<xxx>.ogg        # 云端·讯飞转写（说
 
 # 后台冒烟测试（自包含临时库）
 cd server && node smoke-test.js
+
+# 移动端（浏览器访问 /m/index.html，手机或开发者工具移动视口）
 ```
 
 内网部署：Windows 双击 `deploy/start.bat`；Linux 用 `deploy/docker-compose.yml`。
@@ -171,7 +186,8 @@ BadgeCore/
 | [hardware/firmware/小智-Passport试驾-环境与构建.md](hardware/firmware/小智-Passport试驾-环境与构建.md) | 自编译小智固件构建环境与流程 |
 | [docs/会话模式设计-明确与连续.md](docs/会话模式设计-明确与连续.md) | 会话累积模式设计（D22 拍板） |
 | [docs/性能容量评估与部署规划.md](docs/性能容量评估与部署规划.md) | 性能容量评估与部署规划 |
-| [DECISIONS.md](DECISIONS.md) | 决策日志 D1~D23（每条含决策/理由/放弃的选项） |
+| [docs/三方工牌对接协议.md](docs/三方工牌对接协议.md) | 三方成品工牌推送接入（鉴权三版/dataType/归属保护） |
+| [DECISIONS.md](DECISIONS.md) | 决策日志 D1~D24（每条含决策/理由/放弃的选项） |
 
 ## 里程碑与当前进度
 
@@ -187,6 +203,7 @@ BadgeCore/
 | 内部组织场景 | ✅ M1+M3 | 四场景模板+改标重析+talk 红线+会话累积（09 册，D22） |
 | 企微推送 | ✅ W1-S1 | 定时报告+会议纪要双投企微群（10 册，D23；冒烟 134/134） |
 | 全员考勤 | ✅ 服务端 | ALL-201 判定/补卡/记录，待信标网关实物接入（D14） |
+| 生产实践反哺 | ✅ 七批 | 安全修复（IDOR/Ask AI 数据范围/登出）· 可靠性（analyzing 救援/每日备份/设备离线判定）· 前端（默认主题/静态版本化）· 硬件三层 D24 · 会议实体 · 三方推送协议 · 移动端 H5（2026-11-22，台账见 docs/生产实践反哺台账-20261122.md） |
 | 量产硬件 | ⏳ 暂缓 | 当前主力=L3 二开接入（成品工牌+固件补丁，D24）；L1 全自研画板待方案商询价窗口（D11）；冻结发版攒电量数据 |
 
 ## 常见问题（FAQ）
@@ -199,6 +216,9 @@ BadgeCore/
 
 **Q：默认账号是什么？**
 admin / admin123（首次启动自动建库并生成入库令牌），正式使用请改密。
+
+**Q：手机上能用吗？**
+能。浏览器访问 `/m/index.html`（与后台同源登录），底部 Tab：首页（待办/日程/我的设备）、沟通（列表+详情+AI 报告）、会议、我的（工牌状态）。会话复用后台登录态，无需独立注册。
 
 **Q：量产硬件什么时候有？**
 硬件走三层路线（D24）：**L3 二开接入**（成品工牌 + 开源固件补丁接自建服务端）是当前主力交付形态；**L2 开源硬件**（ESP32-S3 生态开发板）承担开发期验证；**L1 全自研**（从画板开始）是终局目标，开发板全链路验证后再启动方案商询价（D11），当前冻结发版攒设备电量数据，为量产电源设计提供依据。三层之间软件层 100% 复用。
