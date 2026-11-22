@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>会议 - BadgeCore</title>
+<link rel="stylesheet" href="/assets/badge-ui.css?v=20261122b">
+<script src="/assets/app.js?v=20261122b"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const me = await fetch('/api/me').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!me) { location.href = '/login.html'; return; }
+  const main = mountAppShell('meetings', me);
+  main.innerHTML = `
+    <div class="page-head"><h1>会议</h1><span class="spacer"></span>
+      <input id="q" placeholder="搜索会议名称/地点/备注…" style="min-width:220px" onkeydown="if(event.key==='Enter')load()">
+      <button class="btn" onclick="load()">查询</button>
+      <button class="btn primary" onclick="mtDlg()">＋ 新建</button></div>
+    <div class="card" style="padding:0" id="tbl"></div>`;
+
+  async function load() {
+    const q = document.getElementById('q').value;
+    const rows = await api('/api/meetings?q=' + encodeURIComponent(q));
+    renderTable(document.getElementById('tbl'), [
+      { key: 'name', title: '会议名称', render: r => `<b>${esc(r.name)}</b>${r.location ? ` <span style="color:var(--text-3);font-size:12px">· ${esc(r.location)}</span>` : ''}` },
+      { key: 'meeting_at', title: '会议时间', w: '130px', render: r => r.meeting_at ? fmtTime(r.meeting_at) : '<span style="color:var(--text-3)">-</span>' },
+      { key: 'owner', title: '组织人', w: '100px', render: r => esc(r.owner || '<span class="tag">公海</span>') },
+      { key: 'comm_count', title: '沟通数', w: '80px', render: r => `<span class="num">${r.comm_count || 0}</span>` },
+      { key: 'last_comm_at', title: '最近沟通', w: '130px', render: r => r.last_comm_at ? fmtTime(r.last_comm_at) : '-' },
+      { key: 'note', title: '备注', render: r => esc(r.note || '-') },
+    ], rows, r => `<a onclick='mtDetail(${r.id})'>详情</a> · <a onclick='mtDlg(${JSON.stringify(r)})'>编辑</a>${me.role === 'admin' ? ` · <a style="color:var(--danger)" onclick='mtDel(${r.id}, ${JSON.stringify(r.name)})'>删除</a>` : ''}`);
+  }
+  window.load = load;
+
+  window.mtDlg = function (item) {
+    item = item || {};
+    dlg().open({
+      title: item.id ? '编辑会议' : '新建会议',
+      body: `
+        <div class="form-item"><label><b>*</b> 会议名称</label><input id="_m_name" value="${esc(item.name || '')}" placeholder="如：周一例会 / 项目评审会"></div>
+        <div class="form-item"><label>会议时间</label><input id="_m_at" type="datetime-local" value="${(item.meeting_at || '').slice(0, 16)}"></div>
+        <div class="form-item"><label>地点</label><input id="_m_loc" value="${esc(item.location || '')}"></div>
+        ${me.role !== 'sales' ? `<div class="form-item"><label>组织人</label><input id="_m_owner" value="${esc(item.owner || me.name)}"></div>` : ''}
+        <div class="form-item"><label>备注</label><textarea id="_m_note">${esc(item.note || '')}</textarea></div>`,
+      foot: [
+        { label: '取 消', onClick: d => d.close() },
+        { label: '保 存', cls: 'primary', onClick: async d => {
+            const name = document.getElementById('_m_name').value.trim();
+            if (!name) { toast('请填写会议名称'); return; }
+            const body = { name, meeting_at: document.getElementById('_m_at').value, location: document.getElementById('_m_loc').value, note: document.getElementById('_m_note').value };
+            if (item.id) { if (me.role !== 'sales') body.owner = document.getElementById('_m_owner')?.value || item.owner; await api('/api/meetings/' + item.id, { method: 'PUT', body }); }
+            else { if (me.role !== 'sales') body.owner = document.getElementById('_m_owner')?.value || me.name; await api('/api/meetings', { method: 'POST', body }); }
+            d.close(); toast('已保存'); load();
+          } },
+      ],
+    });
+  };
+
+  window.mtDetail = async function (id) {
+    const mt = await api('/api/meetings/' + id);
+    dlg().open({
+      title: `会议详情：${mt.name}`,
+      body: `
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:13px;color:var(--text-2)">
+          <span>时间：${mt.meeting_at ? fmtTime(mt.meeting_at) : '-'}</span><span>地点：${esc(mt.location || '-')}</span>
+          <span>组织人：${esc(mt.owner || '公海')}</span><span>沟通：<span class="num">${mt.comm_count}</span> 条</span></div>
+        ${mt.note ? `<div class="form-item"><label>备注</label><div>${esc(mt.note)}</div></div>` : ''}
+        <div class="form-item"><label>归属沟通（点击跳详情）</label>
+          ${mt.comms.length ? mt.comms.map(c => `<div style="padding:6px 0;border-bottom:1px solid var(--line-2);display:flex;gap:8px;align-items:center">
+            <a href="/communication.html?id=${c.id}"><b>${esc(c.topic || topicFallback(c))}</b></a>
+            <span class="tag info" style="flex:none">${{ sales: '销售', meeting: '会议', training: '培训', talk: '谈话' }[c.scene] || c.scene}</span>
+            <span style="color:var(--text-3);font-size:12px;flex:1">${fmtTime(c.created_at)} · ${esc(c.owner || '-')}${c.customer ? ' · 客户 ' + esc(c.customer.name) : ''}</span></div>`).join('')
+          : '<div style="color:var(--text-3)">暂无归属沟通——可在沟通详情「先分析后关联」补挂本会议</div>'}</div>`,
+      foot: [{ label: '关 闭', onClick: d => d.close() }],
+    });
+  };
+
+  window.mtDel = function (id, name) {
+    if (!confirm(`删除会议「${name}」？\n历史沟通记录保留，仅解除归属。`)) return;
+    api('/api/meetings/' + id, { method: 'DELETE' }).then(() => { toast('已删除'); load(); }).catch(() => {});
+  };
+  load();
+})();
+</script>
+</body>
+</html>

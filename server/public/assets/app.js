@@ -159,6 +159,7 @@ function adminNav() {
     ['沟通计划', 'calendar', [['plans', 'calendar', '计划字段', '/config.html?domain=info_fields&group=plans']]],
     ['客户管理', 'users', [
       ['customers', 'users', '客户列表', '/customers.html'],
+      ['meetings', 'calendar', '会议列表', '/meetings.html'],
       ['cust_fields', 'file-text', '客户字段', '/config.html?domain=info_fields'],
       ['insight_categories', 'layers', '画像配置', '/config.html?domain=insight_categories'],
     ]],

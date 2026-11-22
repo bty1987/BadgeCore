@@ -34,6 +34,15 @@ CREATE TABLE IF NOT EXISTS customers(        -- 客户管理（04 册 §2 / 08 �
   created_at TEXT NOT NULL,
   last_comm_at TEXT                          -- 最近沟通时间（沉默预警用，ALL/风险预警）
 );
+CREATE TABLE IF NOT EXISTS meetings(       -- 会议管理（沟通可归属会议，同客户模式——多条沟通聚于同一会议）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,                        -- 会议名称（如：周一例会 / 项目评审会）
+  meeting_at TEXT,                           -- 会议时间（可空）
+  location TEXT DEFAULT '',                  -- 地点（可空）
+  owner TEXT DEFAULT '',                     -- 组织人/负责人（空=公海）
+  note TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS plans(            -- 沟通计划（REC-02 安排沟通）
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
@@ -156,6 +165,8 @@ function openDb(dbFile) {
     ['users', 'wecom_userid', 'TEXT'],
     // 沟通计划主动提醒（M4）：当日已提醒去重
     ['plans', 'reminded_on', 'TEXT'],
+    // 会议归属：多条沟通聚于同一会议（同 customer_id 模式）
+    ['communications', 'meeting_id', 'INTEGER'],
   ]) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch { /* 列已存在 */ }
   }

@@ -338,6 +338,30 @@ async function runWecomWebhookSuite() {
       check(`前端「沟通#」回落清零（${pg}）`, !/['"`]沟通 ?#' ?\+/.test(txt));
     }
 
+    // 7.7 会议实体：CRUD + 沟通归属读回 + 删除语义（沟通保留仅解除归属）
+    r = await api('POST', '/api/meetings', { name: '周一例会（冒烟）', meeting_at: '2026-11-22T10:00', location: '一号会议室', note: '评审纪要' });
+    check('新建会议', r.status === 200 && r.data?.id > 0);
+    const mtId = r.data.id;
+    r = await api('PUT', `/api/meetings/${mtId}`, { name: '周一例会（冒烟改）', location: '二号会议室' });
+    check('编辑会议', r.status === 200 && r.data?.ok === true);
+    r = await api('PUT', `/api/communications/${ingestData.id}`, { meeting_id: mtId });
+    check('沟通归属会议（PUT 绑定读回）', r.status === 200 && r.data?.meeting_id === mtId);
+    r = await api('GET', `/api/communications/${ingestData.id}`);
+    check('沟通详情会议富信息（名称/时间/地点）', r.data?.meeting?.id === mtId && (r.data.meeting || '').name !== undefined && r.data.meeting.location === '二号会议室');
+    r = await api('GET', `/api/meetings/${mtId}`);
+    check('会议详情下钻含归属沟通', r.status === 200 && (r.data?.comms || []).some(c => c.id === ingestData.id) && r.data?.comm_count >= 1);
+    r = await api('GET', '/api/meetings?q=冒烟改');
+    check('会议列表搜索命中+统计列', (r.data || []).some(mt => mt.id === mtId && mt.comm_count >= 1));
+    r = await api('DELETE', `/api/meetings/${mtId}`);
+    check('删除会议（admin）', r.status === 200);
+    r = await api('GET', `/api/communications/${ingestData.id}`);
+    check('删除语义：沟通保留仅解除归属', r.status === 200 && r.data?.meeting === null);
+    r = await api('PUT', `/api/communications/${ingestData.id}`, { meeting_id: 999999 });
+    check('归属不存在会议 404', r.status === 404);
+    r = await api('POST', '/api/meetings', { name: '越权目标会议' });
+    check('常驻越权目标会议', r.status === 200 && r.data?.id > 0);
+    const mtKeepId = r.data.id;
+
     // 8. 用户与数据范围
     r = await api('POST', '/api/plans', { title: 'admin 冒烟计划' });
     check('新增管理计划', r.status === 200);
@@ -361,6 +385,15 @@ async function runWecomWebhookSuite() {
     check('M4 数据范围：sales 他人沟通不可入库 403', r.status === 403);
     r = await api('POST', '/api/admin/backfill-topics');
     check('backfill 端点 sales 403', r.status === 403);
+    r = await api('PUT', `/api/meetings/${mtKeepId}`, { name: '越权改' });
+    check('数据范围：sales 改他人会议 403', r.status === 403);
+    r = await api('DELETE', `/api/meetings/${mtKeepId}`);
+    check('数据范围：sales 删除他人会议 403（且非 admin）', r.status === 403);
+    r = await api('POST', '/api/meetings', { name: 'sales01 自己的会', owner: 'admin' });
+    check('sales 建会议可提交', r.status === 200);
+    r = await api('GET', '/api/meetings');
+    check('sales 不可伪造组织人（强制本人）', (r.data || []).some(mt => mt.name === 'sales01 自己的会' && mt.owner === 'sales01'));
+
     r = await api('POST', `/api/communications/${ingestData.id}/analyze`);
     check('数据范围：sales 他人记录重析 403', r.status === 403);
     r = await api('POST', `/api/communications/${ingestData.id}/scene`, { scene: 'talk', participants: 'sales01' });
@@ -379,6 +412,10 @@ async function runWecomWebhookSuite() {
     })).json();
     r = await api('POST', '/api/kb-entry', { comm_id: ownIngest.id, domain: 'knowledge_base', name: '销售经验', content: '先听需求再谈方案。' });
     check('M4 sales 本人沟通可入库（贡献正路）', r.status === 200 && r.data?.id > 0);
+    r = await api('GET', '/api/meetings');
+    const ownMt = (r.data || []).find(mt => mt.name === 'sales01 自己的会');
+    r = await api('PUT', `/api/communications/${ownIngest.id}`, { meeting_id: ownMt.id });
+    check('sales 自行改归属 403（归属=管理者动作，ADM-212）', r.status === 403);
     r = await api('POST', `/api/communications/${ownIngest.id}/analyze`);
     check('sales 本人记录可重析（正路）', r.status === 200 && r.data?.ok === true);
     const lr = await fetch(BASE + '/api/logout', { headers: { Cookie: cookie }, redirect: 'manual' });

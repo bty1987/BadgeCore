@@ -772,9 +772,12 @@ async function handleApi(req, res, url) {
       row.todos = db.prepare('SELECT id, kind, what, owner, due, status, done_at FROM todos WHERE comm_id=? ORDER BY id').all(id); // M4 流转
       const cust = row.customer_id ? db.prepare('SELECT id, name FROM customers WHERE id=?').get(row.customer_id) : null;
       row.customer = cust ? { id: cust.id, name: cust.name } : null;
+      const mt = row.meeting_id ? db.prepare('SELECT id, name, meeting_at, location, note FROM meetings WHERE id=?').get(row.meeting_id) : null;
+      row.meeting = mt || null; // 归属会议富信息（名称/时间/地点）
       return sendJson(res, 200, row);
     }
-    if (method === 'PUT' && me.role !== 'sales') { // 先分析后关联（ADM-212）：补挂客户/计划/主题
+    if (method === 'PUT') { // 先分析后关联（ADM-212）：补挂客户/会议/计划/主题（归属是管理者动作，sales 显式 403 而非方法级 405）
+      if (me.role === 'sales') throw new HttpError(403, '归属操作需管理者权限（ADM-212）');
       const b = await readBody(req);
       let customerId = row.customer_id;
       if ('customer' in b) {
@@ -786,11 +789,20 @@ async function handleApi(req, res, url) {
             .run(cname, row.owner, new Date().toISOString(), row.created_at).lastInsertRowid);
         }
       }
-      db.prepare('UPDATE communications SET customer_id=?, plan_id=?, topic=? WHERE id=?')
-        .run(customerId, 'plan_id' in b ? (b.plan_id ? Number(b.plan_id) : null) : row.plan_id,
+      let meetingId = row.meeting_id; // 归属会议（同客户模式）；直传 id 精确绑定，传空解除
+      if ('meeting_id' in b) {
+        if (!b.meeting_id) meetingId = null;
+        else {
+          const mt = db.prepare('SELECT id FROM meetings WHERE id=?').get(Number(b.meeting_id));
+          if (!mt) throw new HttpError(404, '会议不存在');
+          meetingId = mt.id;
+        }
+      }
+      db.prepare('UPDATE communications SET customer_id=?, meeting_id=?, plan_id=?, topic=? WHERE id=?')
+        .run(customerId, meetingId, 'plan_id' in b ? (b.plan_id ? Number(b.plan_id) : null) : row.plan_id,
           'topic' in b ? String(b.topic) : row.topic, id);
-      audit(db, me.name, 'comm_link', `comm#${id}`, b.customer || '');
-      return sendJson(res, 200, { ok: true, customer_id: customerId });
+      audit(db, me.name, 'comm_link', `comm#${id}`, b.customer || (meetingId ? `meeting#${meetingId}` : ''));
+      return sendJson(res, 200, { ok: true, customer_id: customerId, meeting_id: meetingId });
     }
     if (method === 'DELETE') { // 删除权限独立配置（ADM-203：delete_min_role）
       const rank = { sales: 0, manager: 1, admin: 2 };
@@ -1146,6 +1158,60 @@ async function handleApi(req, res, url) {
     if (method === 'DELETE') {
       db.prepare('DELETE FROM plans WHERE id=?').run(id);
       audit(db, me.name, 'plan_delete', `plan#${id}`);
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  // 会议管理：沟通可归属会议，同客户模式——多条沟通聚于同一会议（09 册会议场景的实体承载）
+  if (pathname === '/api/meetings') {
+    if (method === 'GET') {
+      const { q = '' } = Object.fromEntries(url.searchParams);
+      let sql = 'SELECT mt.*, (SELECT COUNT(*) FROM communications c WHERE c.meeting_id=mt.id) AS comm_count,' +
+        ' (SELECT MAX(c.created_at) FROM communications c WHERE c.meeting_id=mt.id) AS last_comm_at FROM meetings mt';
+      const where = []; const params = [];
+      if (me.role === 'sales') { where.push('mt.owner=?'); params.push(me.name); }
+      if (q) { where.push('(mt.name LIKE ? OR mt.note LIKE ? OR mt.location LIKE ?)'); params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+      if (where.length) sql += ' WHERE ' + where.join(' AND ');
+      return sendJson(res, 200, db.prepare(sql + ' ORDER BY mt.id DESC LIMIT 500').all(...params));
+    }
+    if (method === 'POST') {
+      const b = await readBody(req);
+      if (!b.name) throw new HttpError(400, '需要会议名称');
+      const r = db.prepare('INSERT INTO meetings(name, meeting_at, location, owner, note, created_at) VALUES(?,?,?,?,?,?)')
+        .run(redactText(String(b.name)), String(b.meeting_at || ''), redactText(String(b.location || '')),
+          me.role === 'sales' ? me.name : String(b.owner || me.name), // owner 缺省=创建者；sales 不可伪造（同 plans）
+          redactText(String(b.note || '')), new Date().toISOString());
+      audit(db, me.name, 'meeting_create', `meeting#${r.lastInsertRowid}`, String(b.name));
+      return sendJson(res, 200, { id: Number(r.lastInsertRowid) });
+    }
+  }
+  if ((m = pathname.match(/^\/api\/meetings\/(\d+)$/))) {
+    const id = Number(m[1]);
+    const rowMt = db.prepare('SELECT * FROM meetings WHERE id=?').get(id);
+    if (!rowMt) throw new HttpError(404, '会议不存在');
+    if (method === 'GET') { // 会议详情 + 归属沟通列表（沟通叠加数据范围与 talk 可见性）
+      const ownersMt = visibleOwners(me);
+      const comms = db.prepare('SELECT id, created_at, topic, duration_s, status, owner, scene, customer_id FROM communications WHERE meeting_id=? ORDER BY id DESC LIMIT 200').all(id)
+        .filter(c => (ownersMt ? ownersMt.includes(c.owner) : true) && canSeeComm(me, c))
+        .map(c => { const cu = c.customer_id ? db.prepare('SELECT name FROM customers WHERE id=?').get(c.customer_id) : null; return { ...c, customer: cu ? { id: cu.id, name: cu.name } : null }; });
+      return sendJson(res, 200, { ...rowMt, comm_count: comms.length, comms });
+    }
+    if (method === 'PUT') { // 组织人本人或 admin（与 plans 属主校验同款）
+      if (rowMt.owner !== me.name && me.role !== 'admin') throw new HttpError(403, '只能操作本人会议');
+      const b = await readBody(req);
+      db.prepare('UPDATE meetings SET name=?, meeting_at=?, location=?, owner=?, note=? WHERE id=?')
+        .run(redactText(String(b.name ?? rowMt.name)), String(b.meeting_at ?? (rowMt.meeting_at || '')),
+          redactText(String(b.location ?? (rowMt.location || ''))),
+          me.role === 'admin' ? String(b.owner ?? (rowMt.owner || '')) : rowMt.owner, // sales/manager 改不了组织人归属
+          redactText(String(b.note ?? (rowMt.note || ''))), id);
+      audit(db, me.name, 'meeting_update', `meeting#${id}`, String(b.name || ''));
+      return sendJson(res, 200, { ok: true });
+    }
+    if (method === 'DELETE') { // 仅 admin（对齐客户删除语义）：历史沟通保留，仅解除归属
+      if (me.role !== 'admin') throw new HttpError(403, '仅管理员可删除会议');
+      db.prepare('UPDATE communications SET meeting_id=NULL WHERE meeting_id=?').run(id);
+      db.prepare('DELETE FROM meetings WHERE id=?').run(id);
+      audit(db, me.name, 'meeting_delete', `meeting#${id}`, rowMt.name);
       return sendJson(res, 200, { ok: true });
     }
   }
